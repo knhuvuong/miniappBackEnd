@@ -14,12 +14,12 @@ app.use(cors({
 }));
 
 const dbConfig = {
-    user: 'dev1',
-    password: 'dev123@',
-    server: '172.16.2.61',
-    database: 'TMS_Core_DEV',
+    user: process.env.DB_USER,                
+    password: process.env.DB_PASSWORD,        
+    server: process.env.DB_SERVER,            
+    database: process.env.DB_DATABASE,        
     options: {
-        encrypt: false,
+        encrypt: process.env.DB_ENCRYPT === 'true', 
     },
 };
 
