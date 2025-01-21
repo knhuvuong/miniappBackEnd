@@ -13,6 +13,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
+
 const dbConfigSecond = {
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
