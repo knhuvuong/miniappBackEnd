@@ -15,19 +15,15 @@ app.use(cors({
 
 
 const dbConfigSecond = {
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    server: process.env.DB_SERVER,
-    database: process.env.DB_NAME,
+    user: 'sa',
+    password: '123456',
+    server: '172.255.24.77',
+    database: 'miniapp',
     options: {
         encrypt: false,
         trustServerCertificate: true
     }
 };
-
-app.get('/', (req, res) => {
-    res.send('Welcome to the Zalo MiniApp Backend!');
-});
 
 //tìm kiếm thông tin cựu sinh viên trong db
 app.get('/api/SinhViens/search', async (req, res) => {
