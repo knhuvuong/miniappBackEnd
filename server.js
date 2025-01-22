@@ -24,8 +24,19 @@ const dbConfigSecond = {
     }
 };
 
-//tìm kiếm thông tin cựu sinh viên trong db
 app.get('/', async (req, res) => {
+    try {
+        const pool = new sql.ConnectionPool(dbConfigSecond);
+        await pool.connect();
+        res.status(200).send('Kết nối thành công!');
+    } catch (err) {
+        console.error('Lỗi kết nối SQL Server:', err);
+        res.status(500).send('Lỗi kết nối SQL Server');
+    }
+});
+
+//tìm kiếm thông tin cựu sinh viên trong db
+app.get('/api/SinhViens/search', async (req, res) => {
     const { keyword, page = 1, pageSize = 20 } = req.query;
     try {
         const pool = new sql.ConnectionPool(dbConfigSecond);
