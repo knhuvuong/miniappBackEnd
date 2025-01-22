@@ -35,6 +35,7 @@ app.get('/', async (req, res) => {
     }
 });
 
+
 //tìm kiếm thông tin cựu sinh viên trong db
 app.get('/api/SinhViens/search', async (req, res) => {
     const { keyword, page = 1, pageSize = 20 } = req.query;
