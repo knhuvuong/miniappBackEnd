@@ -24,6 +24,10 @@ const dbConfigSecond = {
     }
 };
 
+app.get('/', (req, res) => {
+    res.send('welcome');
+});
+
 //tìm kiếm thông tin cựu sinh viên trong db
 app.get('/api/SinhViens/search', async (req, res) => {
     const { keyword, page = 1, pageSize = 20 } = req.query;
@@ -220,7 +224,7 @@ app.get('/api/SinhViens/info', async (req, res) => {
     } catch (err) {
         console.error('SQL Server Error:', err.message);
         res.status(500).json({ error: 'Lỗi kết nối SQL Server', details: err.message });
-    } 
+    }
 });
 
 //cập nhật thông tin
