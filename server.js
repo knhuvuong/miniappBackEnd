@@ -24,12 +24,8 @@ const dbConfigSecond = {
     }
 };
 
-app.get('/', (req, res) => {
-    res.send('welcome');
-});
-
 //tìm kiếm thông tin cựu sinh viên trong db
-app.get('/api/SinhViens/search', async (req, res) => {
+app.get('/', async (req, res) => {
     const { keyword, page = 1, pageSize = 20 } = req.query;
     try {
         const pool = new sql.ConnectionPool(dbConfigSecond);
