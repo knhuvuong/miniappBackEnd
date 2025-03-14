@@ -41,6 +41,10 @@ const generateOTP = () => {
     return Math.floor(1000 + Math.random() * 9000).toString();
 };
 
+app.get('/api/test', (req, res) => {
+    res.json({ message: "API is working!" });
+  });  
+
 //gửi otp cập nhật thông tin
 app.post("/api/sendOTP", async (req, res) => {
     const { mail } = req.body;
