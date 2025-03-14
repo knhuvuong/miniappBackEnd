@@ -9,7 +9,7 @@ const app = express();
 app.use(bodyParser.json());
 
 app.use(cors({
-    origin: ['http://localhost:3000', 'https://h5.zalo.me', 'zbrowser://h5.zalo.me'],
+    origin: ['http://localhost:3000', 'https://h5.zalo.me', 'zbrowser://h5.zalo.me', 'https://miniappbackend-39i4.onrender.com'],
     methods: ['GET', 'POST', 'PUT', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization'],
 }));
