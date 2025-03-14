@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const sql = require('mssql');
 const cors = require('cors');
+const nodemailer = require("nodemailer");
 require('dotenv').config();
 
 const app = express();
@@ -19,13 +20,112 @@ const dbConfigSecond = {
     server: process.env.DB_SERVER,
     database: process.env.DB_NAME,
     options: {
-        encrypt: true,
-        trustServerCertificate: false
+        encrypt: false,
+        trustServerCertificate: true
     }
 };
 
 app.get('/', (req, res) => {
     res.send('welcome');
+});
+
+const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: {
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASS,
+    },
+});
+
+const generateOTP = () => {
+    return Math.floor(1000 + Math.random() * 9000).toString();
+};
+
+//gửi otp cập nhật thông tin
+app.post("/api/sendOTP", async (req, res) => {
+    const { mail } = req.body;
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 2 * 60 * 1000); //het han 2'
+
+    if (!mail) {
+        return res.status(400).send({ message: "Email không hợp lệ!" });
+    }
+
+    const otp = generateOTP();
+    const createAtUTC = new Date(now.getTime() + 7 * 60 * 60 * 1000);
+    const expiresAtUTC = new Date(expiresAt.getTime() + 7 * 60 * 60 * 1000);
+    const verify = 0
+
+    try {
+        const pool = new sql.ConnectionPool(dbConfigSecond);
+        await pool.connect();
+
+        const existingOTP = await pool.request()
+            .input('Mail', sql.NVarChar, mail)
+            .query(`SELECT 1 FROM OTP WHERE Mail = @Mail AND NgayHetHan > GETDATE()`);
+
+        if (existingOTP.recordset.length > 0) {
+            return res.status(429).send({ message: "Vui lòng chờ trước khi yêu cầu OTP mới." });
+        }
+
+        await pool.request()
+            .input('Mail', sql.NVarChar, mail)
+            .input('OTP', sql.NVarChar, otp)
+            .input('NgayTao', sql.DateTime, createAtUTC)
+            .input('NgayHetHan', sql.DateTime, expiresAtUTC)
+            .input('TrangThai', sql.Bit, verify)
+            .query(`INSERT INTO OTP (Mail, OTP, NgayTao, NgayHetHan, TrangThai) VALUES (@Mail, @OTP, @NgayTao, @NgayHetHan, @TrangThai)`);
+
+        const mailOptions = {
+            from: "nhukhanhtv052@gmail.com",
+            to: mail,
+            subject: "Mã OTP xác thực của bạn",
+            text: `Mã OTP của bạn là: ${otp}. Vui lòng không chia sẻ mã này với bất kỳ ai!`,
+        };
+
+        transporter.sendMail(mailOptions, (error, info) => {
+            if (error) {
+                console.log(error);
+                return res.status(500).send({ message: "Lỗi khi gửi OTP qua mail", error });
+            }
+
+            console.log("OTP đã được gửi thành công: " + info.response);
+            return res.status(200).send({ message: "Thành công", info });
+        });
+
+    } catch (error) {
+        console.error("Lỗi khi gửi OTP:", error);
+        return res.status(500).send({ message: "Lỗi hệ thống", error });
+    }
+});
+
+//xác nhận otp
+app.post("/api/verifyOTP", async (req, res) => {
+    const { mail, otp } = req.body;
+
+    try {
+        const pool = new sql.ConnectionPool(dbConfigSecond);
+        await pool.connect();
+
+        const result = await pool.request()
+            .input('Mail', sql.NVarChar, mail)
+            .input('OTP', sql.NVarChar, otp)
+            .query(`SELECT * FROM OTP WHERE Mail = @Mail AND OTP = @OTP AND NgayHetHan > GETDATE() AND TrangThai = 0`);
+
+        if (result.recordset.length === 0) {
+            return res.status(400).send({ message: "OTP không hợp lệ, đã hết hạn hoặc đã được sử dụng!" });
+        }
+
+        await pool.request()
+            .input('Mail', sql.NVarChar, mail)
+            .query(`UPDATE OTP SET TrangThai = 1 WHERE Mail = @Mail`);
+
+        return res.status(200).send({ message: "Xác minh OTP thành công!" });
+
+    } catch (error) {
+        console.error("Lỗi khi xác minh OTP:", error);
+        return res.status(500).send({ message: "Lỗi hệ thống", error });
+    }
 });
 
 //tìm kiếm thông tin cựu sinh viên trong db
@@ -370,6 +470,42 @@ app.get('/api/ChiTietBanTin', async (req, res) => {
     } catch (err) {
         console.error(err);
         res.status(500).send('Lỗi kết nối SQL Server');
+    }
+});
+
+//góp ý 
+app.post('/api/GopY', async (req, res) => {
+    const { HoTen, Email, TieuDe, NoiDung } = req.body;
+
+    if (!HoTen || !Email || !TieuDe || !NoiDung) {
+        return res.status(400).send('Thiếu thông tin bắt buộc');
+    }
+
+    try {
+        const pool = await sql.connect(dbConfigSecond);
+
+        const result = await pool.request().query(`
+            SELECT @@SERVERNAME AS ServerName, DB_NAME() AS DatabaseName
+        `);
+
+        console.log('Server đang kết nối:', result.recordset[0]);
+
+        await pool.request()
+            .input('HoTen', sql.NVarChar, HoTen)
+            .input('Email', sql.NVarChar, Email)
+            .input('TieuDe', sql.NVarChar, TieuDe)
+            .input('NoiDung', sql.NVarChar, NoiDung)
+            .query(`
+                INSERT INTO GopY (HoTen, Email, TieuDe, NoiDung, NgayGopY)
+                VALUES (@HoTen, @Email, @TieuDe, @NoiDung, GETDATE())
+            `);
+
+        res.status(200).send('Góp ý đã được ghi nhận');
+    } catch (err) {
+        console.error('Lỗi chi tiết:', err);
+        res.status(500).send('Lỗi khi cập nhật');
+    } finally {
+        await sql.close();
     }
 });
 
