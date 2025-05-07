@@ -10,8 +10,6 @@ const SECRET_KEY = process.env.ZALO_APP_SECRET;
 app.get('/zalo/callback', async (req, res) => {
   const { code, state } = req.query;
 
-
-
   if (!code || !state) {
     return res.status(400).send('Missing code or state');
   }
@@ -43,11 +41,11 @@ app.get('/zalo/callback', async (req, res) => {
     const tokenData = response.data;
     saveToken(tokenData);
 
-    console.log('ACCESS TOKEN:', access_token);
-    console.log('REFRESH TOKEN:', refresh_token);
-    console.log('OA ID:', oa_id);
-    console.log('Hết hạn sau (giây):', expires_in);
-
+    console.log('ACCESS TOKEN:', tokenData.access_token);
+    console.log('REFRESH TOKEN:', tokenData.refresh_token);
+    console.log('OA ID:', tokenData.oa_id);
+    console.log('Hết hạn sau (giây):', tokenData.expires_in);
+    
     res.send('Lấy access token thành công! Xem console để biết thêm chi tiết.');
 
   } catch (error) {

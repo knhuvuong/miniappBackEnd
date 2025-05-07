@@ -1,16 +1,15 @@
+require('dotenv').config();
 const express = require('express');
 const bodyParser = require('body-parser');
 const sql = require('mssql');
 const cors = require('cors');
 const nodemailer = require("nodemailer");
-require('dotenv').config();
 const axios = require("axios");
 const cron = require('node-cron');
-
 const zaloCallback = require('./zaloCallback');
 const refreshAccessToken = require('./refreshToken');
-const app = express();
 const { getToken } = require('./verifierTokenStore');
+const app = express();
 
 cron.schedule('0 0 * * *', async () => {
     const tokenData = getToken();
@@ -50,14 +49,14 @@ const generateOTP = () => {
 
 app.use(bodyParser.json());
 
-app.use(cors({ origin: "*" }));
+app.use(cors()); 
 
 app.use('/', zaloCallback);
 
-//gửi otp cập nhật thông tin
+//gửi otp 
 app.post("/api/sendOTP", async (req, res) => {
-    const { mail, zaloAccId } = req.body;
-    console.log(mail, zaloAccId)
+    const { mail } = req.body;
+    console.log(mail)
     const now = new Date();
     const expiresAt = new Date(now.getTime() + 2 * 60 * 1000); //het han 2'
 
@@ -84,12 +83,12 @@ app.post("/api/sendOTP", async (req, res) => {
 
         await pool.request()
             .input('Mail', sql.NVarChar, mail)
-            .input('ZaloAcc_ID', sql.Int, zaloAccId)
+            // .input('ZaloAcc_ID', sql.Int, zaloAccId)
             .input('OTP', sql.NVarChar, otp)
             .input('NgayTao', sql.DateTime, createAtUTC)
             .input('NgayHetHan', sql.DateTime, expiresAtUTC)
             .input('TrangThai', sql.Bit, verify)
-            .query(`INSERT INTO Zalo_OTP (Mail, ZaloAcc_ID, OTP, NgayTao, NgayHetHan, TrangThai) VALUES (@Mail, @ZaloAcc_ID, @OTP, @NgayTao, @NgayHetHan, @TrangThai)`);
+            .query(`INSERT INTO Zalo_OTP (Mail, OTP, NgayTao, NgayHetHan, TrangThai) VALUES (@Mail, @OTP, @NgayTao, @NgayHetHan, @TrangThai)`);
 
         const mailOptions = {
             from: "nhukhanhtv052@gmail.com",
@@ -110,7 +109,7 @@ app.post("/api/sendOTP", async (req, res) => {
 
     } catch (error) {
         console.error("Lỗi khi gửi OTP:", error);
-        return res.status(500).send({ message: "Lỗi hệ thống", error });
+        return res.status(500).send({ message: "Internal Server Error", error });
     }
 });
 
@@ -143,7 +142,7 @@ app.post("/api/verifyOTP", async (req, res) => {
 
     } catch (error) {
         console.error("Lỗi khi xác minh OTP:", error);
-        return res.status(500).send({ message: "Lỗi hệ thống", error });
+        return res.status(500).send({ message: "Internal Server Error", error });
     }
 });
 
@@ -156,7 +155,7 @@ app.get('/api/SinhViens/search', async (req, res) => {
 
         const request = pool.request();
 
-        let query = 'SELECT STT, MaSV, MaLop, TenDayDu, Nam, TenNganh FROM SinhVien_Edu_TotNghiep_27042024 WHERE 1=1';
+        let query = 'SELECT STT, SinhVien_ID , MaSV, MaLop, TenDayDu, Nam, TenNganh FROM SinhVien_Edu_TotNghiep_27042024 WHERE 1=1';
 
         if (keyword) {
             if (!isNaN(keyword)) {
@@ -203,7 +202,7 @@ app.get('/api/SinhViens/search', async (req, res) => {
 
     } catch (err) {
         console.error(err);
-        res.status(500).send('Lỗi kết nối SQL Server');
+        res.status(500).send('Internal Server Error');
     }
 });
 
@@ -263,7 +262,7 @@ app.get('/api/SinhViens/Zalo/search', async (req, res) => {
 
     } catch (err) {
         console.error(err);
-        res.status(500).send('Lỗi kết nối SQL Server');
+        res.status(500).send('Internal Server Error');
     }
 });
 
@@ -311,7 +310,7 @@ app.get('/api/SinhViens/list', async (req, res) => {
 
     } catch (err) {
         console.error(err);
-        res.status(500).send('Lỗi kết nối SQL Server');
+        res.status(500).send('Internal Server Error');
     }
 });
 
@@ -340,7 +339,7 @@ app.get('/api/SinhViens/info', async (req, res) => {
         res.json({ profile: result.recordset[0] });
     } catch (err) {
         console.error('SQL Server Error:', err.message);
-        res.status(500).json({ error: 'Lỗi kết nối SQL Server', details: err.message });
+        res.status(500).json({ error: 'Internal Server Error', details: err.message });
     } finally {
         if (pool) pool.close();
     }
@@ -351,6 +350,12 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         SVTN_ID, MaSV, MaLop, HoTen, Sdt, Email, Khoa, ChucVu,
         DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien
     } = req.body;
+
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    console.log(MaSV)
 
     if (!SVTN_ID || !MaSV || !MaLop || !HoTen || !Sdt || !Email || !Khoa || !ZaloID || !AnhDaiDien) {
         return res.status(400).send('Thiếu thông tin bắt buộc');
@@ -377,7 +382,7 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
             const updateRequest = pool.request();
             updateRequest.input('ZaloID', sql.NVarChar, ZaloID)
                 .input('SVTN_ID', sql.Int, SVTN_ID)
-                .input('MaSV', sql.Int, MaSV)
+                .input('MaSV', sql.VarChar, MaSV)
                 .input('MaLop', sql.VarChar, MaLop)
                 .input('HoTen', sql.NVarChar, HoTen)
                 .input('Sdt', sql.NVarChar, Sdt)
@@ -407,7 +412,7 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
             const insertRequest = pool.request();
             insertRequest
                 .input('SVTN_ID', sql.Int, SVTN_ID)
-                .input('MaSV', sql.Int, MaSV)
+                .input('MaSV', sql.VarChar, MaSV)
                 .input('MaLop', sql.VarChar, MaLop)
                 .input('HoTen', sql.NVarChar, HoTen)
                 .input('Sdt', sql.NVarChar, Sdt)
@@ -437,6 +442,36 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
             zaloAccId = insertResult.recordset[0]?.ID;
         }
 
+        if (zaloAccId && Sdt) {
+            const znsPayload = {
+                phone: Sdt.startsWith('0') ? `84${Sdt.slice(1)}` : Sdt,
+                template_id: "426499", 
+                template_data: {
+                    ten_sinh_vien: HoTen,
+                    ma_sinh_vien: MaSV,
+                    sdt_sinh_vien: Sdt,
+                    email_sinh_vien: Email
+                },
+            };
+
+            try {
+                const znsRes = await fetch("https://business.openapi.zalo.me/message/template", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "access_token": accessToken
+                    },
+                    body: JSON.stringify(znsPayload)
+                });
+
+                const znsData = await znsRes.json();
+
+                console.log("📨 Kết quả gửi ZNS:", znsData);
+            } catch (znsErr) {
+                console.error("⚠️ Gửi ZNS thất bại:", znsErr);
+            }
+        }
+
         res.status(200).send({
             message: 'Thành công tạo mới user',
             zaloAccId: zaloAccId || null
@@ -444,7 +479,7 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
 
     } catch (err) {
         console.error("🔥 Lỗi xử lý:", err);
-        res.status(500).send('Lỗi khi gửi OTP');
+        res.status(500).send('Internal Server Error');
     } finally {
         pool && pool.close();
     }
@@ -535,40 +570,13 @@ app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
         }
     } catch (err) {
         console.error('Lỗi chi tiết:', err);
-        res.status(500).send('Lỗi khi cập nhật');
+        res.status(500).send('Internal Server Error');
     } finally {
         if (pool) {
             await pool.close();
         }
     }
 });
-
-// const url = "https://business.openapi.zalo.me/message/template";
-// const payload = {
-//     phone: Sdt,  
-//     template_id: "your_template_id_here",  
-//     template_data: {
-//         content: `Bạn đã cập nhật thành công thông tin cho mini app Kết Nối Cựu Sinh Viên!`
-//     }
-// };
-
-// const response = await fetch(url, {
-//     method: "POST",
-//     headers: {
-//         "Content-Type": "application/json",
-//         "access_token": "your_access_token_here",
-//     },
-//     body: JSON.stringify(payload),
-// });
-
-// const responseData = await response.json();
-// console.log("Phản hồi từ ZNS API:", responseData);
-
-// if (!response.ok) {
-//     console.error("Lỗi khi gửi ZNS:", responseData);
-// }
-
-// 5 bản tin mới nhất
 
 app.get('/api/BanTinMoiNhatCSV', async (req, res) => {
     try {
@@ -577,7 +585,7 @@ app.get('/api/BanTinMoiNhatCSV', async (req, res) => {
         res.json(result.recordset);
     } catch (err) {
         console.error(err);
-        res.status(500).send('Lỗi kết nối SQL Server');
+        res.status(500).send('Internal Server Error');
     }
 });
 
@@ -623,7 +631,7 @@ app.get('/api/TatCaBanTin', async (req, res) => {
 
     } catch (err) {
         console.error(err);
-        res.status(500).send('Lỗi kết nối SQL Server');
+        res.status(500).send('Internal Server Error');
     }
 });
 
@@ -649,7 +657,7 @@ app.get('/api/ChiTietBanTin', async (req, res) => {
         res.json(result.recordset[0]);
     } catch (err) {
         console.error(err);
-        res.status(500).send('Lỗi kết nối SQL Server');
+        res.status(500).send('Internal Server Error');
     }
 });
 
@@ -670,7 +678,7 @@ app.post('/api/GopY', async (req, res) => {
 
         if (checkZaloIdResult.recordset.length === 0) {
             return res.status(400).send('ZaloId không tồn tại');
-        }
+        } 
 
         const result = await pool.request().query(`
             SELECT @@SERVERNAME AS ServerName, DB_NAME() AS   DatabaseName
@@ -691,7 +699,7 @@ app.post('/api/GopY', async (req, res) => {
         res.status(200).send('Góp ý đã được ghi nhận');
     } catch (err) {
         console.error('Lỗi chi tiết:', err);
-        res.status(500).send('Lỗi khi cập nhật');
+        res.status(500).send('Internal Server Error');
     } finally {
         await sql.close();
     }
@@ -704,7 +712,7 @@ app.get("/api/BanTinMoiNhat", async (req, res) => {
         const response = await axios.get(url);
         res.send(response.data);
     } catch (error) {
-        res.status(500).send("Lỗi proxy: " + error.message);
+        res.status(500).send("Internal Server Error: " + error.message);
     }
 });
 
@@ -715,9 +723,18 @@ app.get("/api/ChiTietBanTin", async (req, res) => {
         const response = await axios.get(url);
         res.send(response.data);
     } catch (error) {
-        res.status(500).send("Lỗi proxy: " + error.message);
+        res.status(500).send("Internal Server Error: " + error.message);
     }
 });
+
+//--------------------------------------Thống kê-----------------------------------//
+
+//số lượng csv có thông tin tài khoản mini app
+
+
+//số lượng theo khóa ngành địa chỉ
+
+
 
 //----------------------------------------Zalo------------------------------------//
 
@@ -728,11 +745,14 @@ app.get('/api/Zalo/followers', async (req, res) => {
         const count = parseInt(req.query.count) || 20;
 
         const tokenData = getToken();
-        if (!accessToken) return res.status(401).json({ error: 'Thiếu access_token' });
-    
+        const accessToken = tokenData.access_token
+        console.log(tokenData.access_token)
+
+        if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
+
         const response = await axios.get('https://openapi.zalo.me/v2.0/oa/getfollowers', {
             headers: {
-                access_token: tokenData.access_token
+                access_token: accessToken
             },
             params: {
                 data: JSON.stringify({ offset, count })
@@ -742,7 +762,7 @@ app.get('/api/Zalo/followers', async (req, res) => {
         res.json(response.data);
     } catch (err) {
         console.error('Lỗi lấy followers:', err.response?.data || err.message);
-        res.status(500).json({ error: 'Không lấy được danh sách followers' });
+        res.status(500).json({ error: 'Internal Server Error' });
     }
 });
 
@@ -756,7 +776,11 @@ app.get('/api/Zalo/detailfollower', async (req, res) => {
             return res.status(400).json({ error: 'Thiếu user_id trong yêu cầu' });
         }
 
-        const accessToken = "qnlCHiwNAsBN6yr9pvOlRD8SpqVEZKiLgmFfKUZqSGgh59HapCGF5uCmwqoUwNCyrZ-K5Ohv5pl57w9gYSiyFTq5gXMNuYfzuXMuLlxU90oVAxrqzSKx3B8MdMBN_nrEY3ATPztd2qt1BkeSXSjhJ_0U-MMlw6CXknBOSDdtH2UZ8T8EvSPHMempqINYnJ10lI3KBUBpDto0Bf44cTCDLVDSZtppY181vrZpSlg45HRZTf5ugvbr2hTvq2NZd5LZzdAn3eIu54gOHVO0qvaVNuf5X7ANapyFtng2LgQLQWFuNej-bzOpKC0krHg1o5r9sndxC93iSK_r9Sm6ZArIKlX8pGIYnNvtjn3h3EZmQtYo1Vefs8rRUBq0qWBRrpHGm1wcUi3bBrQc5gyWoD0yJjmElnbnHIs_q1pAYYre";
+        const tokenData = getToken();
+        const accessToken = tokenData.access_token
+        console.log(tokenData.access_token)
+
+        if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
         const response = await axios.get('https://openapi.zalo.me/v2.0/oa/getprofile', {
             headers: {
@@ -771,7 +795,7 @@ app.get('/api/Zalo/detailfollower', async (req, res) => {
     } catch (err) {
         console.error('Lỗi lấy thông tin follower:', err.response?.data || err.message);
         res.status(err.response?.status || 500).json({
-            error: 'Không lấy được thông tin follower',
+            error: 'Internal Server Error',
             message: err.response?.data || err.message
         });
     }
@@ -779,16 +803,20 @@ app.get('/api/Zalo/detailfollower', async (req, res) => {
 
 //gửi broadcast
 app.post('/api/Zalo/sendbroadcast', async (req, res) => {
-    //   const oaAccessToken = getAccessToken(); 
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
+
     const {
-        gender,       // 0: tất cả, 1: nam, 2: nữ
-        cities,       // Mã tỉnh thành, có thể là chuỗi, vd: "4" (TP.HCM)
-        attachment_id // ID bài viết/media đã upload qua CMS hoặc API
+        gender,       
+        cities,       
+        attachment_id
     } = req.body;
 
     if (!attachment_id) {
-        return res.status(400).json({ message: 'Thiếu attachment_id nè chị êi 😭' });
+        return res.status(400).json({ message: 'Thiếu attachment_id' });
     }
 
     const data = {
@@ -817,19 +845,19 @@ app.post('/api/Zalo/sendbroadcast', async (req, res) => {
     try {
         const response = await axios.post('https://openapi.zalo.me/v2.0/oa/message', data, {
             headers: {
-                'access_token': oaAccessToken,
+                'access_token': accessToken,
                 'Content-Type': 'application/json'
             }
         });
 
         res.status(200).json({
-            message: 'Broadcast thành công 🎉',
+            message: 'Broadcast thành công',
             zalo_response: response.data
         });
     } catch (error) {
         console.error('Zalo broadcast error:', error.response?.data || error.message);
         res.status(500).json({
-            message: 'Gửi broadcast thất bại 💣',
+            message: 'Gửi broadcast thất bại',
             error: error.response?.data || error.message
         });
     }
@@ -837,13 +865,17 @@ app.post('/api/Zalo/sendbroadcast', async (req, res) => {
 
 //tạo bài viết
 app.post('/api/Zalo/create-article', async (req, res) => {
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
     const { title, author, cover, description, body } = req.body;
 
     if (!title || !author || !description || !body || !cover) {
         return res.status(400).json({
-            message: 'Thiếu các trường bắt buộc: title, author, description, body, cover 😓'
+            message: 'Thiếu các trường bắt buộc: title, author, description, body, cover'
         });
     }
 
@@ -863,13 +895,13 @@ app.post('/api/Zalo/create-article', async (req, res) => {
             {
                 headers: {
                     'Content-Type': 'application/json',
-                    'access_token': oaAccessToken
+                    'access_token': accessToken
                 }
             }
         );
 
         res.status(200).json({
-            message: 'Tạo bài viết thành công',
+            message: 'Tạo bài viết thành công!',
             data: response.data
         });
     } catch (error) {
@@ -883,7 +915,11 @@ app.post('/api/Zalo/create-article', async (req, res) => {
 
 //chỉnh sửa bài viết
 app.post("/api/Zalo/update-article", async (req, res) => {
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
     try {
         const {
@@ -916,7 +952,7 @@ app.post("/api/Zalo/update-article", async (req, res) => {
             {
                 headers: {
                     "Content-Type": "application/json",
-                    access_token: oaAccessToken
+                    access_token: accessToken
                 }
             }
         );
@@ -936,18 +972,21 @@ app.post("/api/Zalo/update-article", async (req, res) => {
 
 //xóa bài viết
 app.post("/api/Zalo/remove", async (req, res) => {
-    const { id } = req.query; // id sẽ được lấy từ query string
+    const { id } = req.query;
 
     if (!id) {
         return res.status(400).json({ error: 'Thiếu id trong yêu cầu' });
     }
 
     try {
-        const accessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+        const tokenData = getToken();
+        const accessToken = tokenData.access_token
+        console.log(tokenData.access_token)
 
-        // Gửi yêu cầu API của Zalo với dữ liệu JSON
+        if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
+
         const response = await axios.post('https://openapi.zalo.me/v2.0/article/remove', {
-            id: id // Truyền id vào body của yêu cầu
+            id: id
         }, {
             headers: {
                 "Content-Type": "application/json",
@@ -955,7 +994,6 @@ app.post("/api/Zalo/remove", async (req, res) => {
             }
         });
 
-        // Trả kết quả từ API Zalo về cho client
         res.json(response.data);
     } catch (err) {
         console.error('Lỗi xóa bài viết:', err.response?.data || err.message);
@@ -975,7 +1013,11 @@ app.get("/api/Zalo/getdetail", async (req, res) => {
             return res.status(400).json({ error: 'Thiếu id trong yêu cầu' });
         }
 
-        const accessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+        const tokenData = getToken();
+        const accessToken = tokenData.access_token
+        console.log(tokenData.access_token)
+
+        if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
         const response = await axios.get('https://openapi.zalo.me/v2.0/article/getdetail', {
             headers: {
@@ -998,15 +1040,18 @@ app.get("/api/Zalo/getdetail", async (req, res) => {
 
 //lấy danh sách bài viết
 app.get('/api/Zalo/articles', async (req, res) => {
-    // const oaAccessToken = process.env.ZALO_OA_ACCESS_TOKEN;
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
     const { offset = 0, limit = 5, type = 'normal' } = req.query;
 
     try {
         const response = await axios.get('https://openapi.zalo.me/v2.0/article/getslice', {
             headers: {
-                'access_token': oaAccessToken
+                'access_token': accessToken
             },
             params: {
                 offset,
@@ -1031,7 +1076,11 @@ app.get('/api/Zalo/articles', async (req, res) => {
 //lấy danh sách template ZNS
 app.get('/api/Zalo/templates', async (req, res) => {
 
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
     const {
         offset = 0,
@@ -1042,7 +1091,7 @@ app.get('/api/Zalo/templates', async (req, res) => {
     try {
         const response = await axios.get('https://business.openapi.zalo.me/template/all', {
             headers: {
-                'access_token': oaAccessToken
+                'access_token': accessToken
             },
             params: {
                 offset,
@@ -1067,7 +1116,11 @@ app.get('/api/Zalo/templates', async (req, res) => {
 //lấy chi tiết template ZNS
 app.get('/api/Zalo/detailtemplates', async (req, res) => {
 
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
     const templateId = req.query.template_id;
 
@@ -1079,7 +1132,7 @@ app.get('/api/Zalo/detailtemplates', async (req, res) => {
         const response = await axios.get('https://business.openapi.zalo.me/template/info/v2', {
             headers: {
                 'Content-Type': 'application/json',
-                'access_token': oaAccessToken
+                'access_token': accessToken
             },
             params: {
                 template_id: templateId
@@ -1101,8 +1154,11 @@ app.get('/api/Zalo/detailtemplates', async (req, res) => {
 
 //gửi ZNS (develoment mode), phone phải là của quản trị viên của OA hoặc của mini app
 app.post('/api/Zalo/send-devtemplate', async (req, res) => {
-    // const oaAccessToken = process.env.ZALO_OA_ACCESS_TOKEN;
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
     const {
         phone,
@@ -1131,7 +1187,7 @@ app.post('/api/Zalo/send-devtemplate', async (req, res) => {
             {
                 headers: {
                     'Content-Type': 'application/json',
-                    'access_token': oaAccessToken
+                    'access_token': accessToken
                 }
             }
         );
@@ -1151,8 +1207,11 @@ app.post('/api/Zalo/send-devtemplate', async (req, res) => {
 
 //gửi ZNS
 app.post('/api/Zalo/send-template', async (req, res) => {
-    // const oaAccessToken = process.env.ZALO_OA_ACCESS_TOKEN;
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
     const {
         phone,
@@ -1179,7 +1238,7 @@ app.post('/api/Zalo/send-template', async (req, res) => {
             {
                 headers: {
                     'Content-Type': 'application/json',
-                    'access_token': oaAccessToken
+                    'access_token': accessToken
                 }
             }
         );
@@ -1199,7 +1258,12 @@ app.post('/api/Zalo/send-template', async (req, res) => {
 
 //lấy dữ liệu mẫu của template
 app.get('/api/Zalo/template-info', async (req, res) => {
-    const oaAccessToken = "y8iaSNP_SsBqYoL-TtvtRF6C9t1sPG4EgC4H25Xq7awbnoSpLMWl89V-UJzuJMn1YC1dBdrrGaUTXqbLUW5O3vo_NmbT0LnOgOW4ENChILU4W5mg1X9uBDJdON0AL7astUfZGZ5RSItlgI5S70eU9uV_7sO0T4ehvE92PJ5nLNhznruIPdDQNgJVTJzvLNHkgD5y4ozpK6tOsaaM6MzU2-ldIMCsLaCUyDSJ0Xz9ALxx-2OW7ceFVUBF5InvM1XThTeS3tDIJ7MJyMaFNLviSPhVUY9TNszpdk5yDMPDNqU2qru8RaTqHksp80OVC0WKpA8xJ4ChBI-qgWfqQoyzEhNGQ6XK9q0mcez7M6DnHa2xy7OvPdjzIf7DBrL5RY4LjU0CM69X84UmvpfQGHPi4BQ3VcX3DxR7O2joOdLe";
+    const tokenData = getToken();
+    const accessToken = tokenData.access_token
+    console.log(tokenData.access_token)
+
+    if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
+
     const { template_id } = req.query;
 
     if (!template_id) {
@@ -1217,7 +1281,7 @@ app.get('/api/Zalo/template-info', async (req, res) => {
                 },
                 headers: {
                     'Content-Type': 'application/json',
-                    'access_token': oaAccessToken
+                    'access_token': accessToken
                 }
             }
         );
@@ -1240,4 +1304,3 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
 });
-

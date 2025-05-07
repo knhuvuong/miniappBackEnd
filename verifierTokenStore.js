@@ -51,9 +51,64 @@ function getToken() {
   return JSON.parse(content);
 }
 
+// ===== Token Expiry Check =====
+
+function getTokenExpiryTime(updatedAt, expiresIn) {
+  const updatedAtDate = new Date(updatedAt);
+  return updatedAtDate.getTime() + expiresIn * 1000; 
+}
+
+function isTokenExpired() {
+  const tokenData = getToken();
+  if (!tokenData || !tokenData.updated_at || !tokenData.expires_in) {
+    console.warn('Không tìm thấy thông tin token hợp lệ.');
+    return true;
+  }
+
+  const expiryTime = getTokenExpiryTime(tokenData.updated_at, tokenData.expires_in);
+  const currentTime = Date.now();
+  return currentTime >= expiryTime; 
+}
+
+async function getAccessToken() {
+  const tokenData = getToken();
+
+  if (!tokenData) {
+    console.warn('Không tìm thấy token. Bạn cần đăng nhập hoặc lấy token mới.');
+    return null;
+  }
+
+  if (isTokenExpired()) {
+    console.log('Token đã hết hạn. Đang tiến hành refresh token...');
+
+    const refreshToken = tokenData.refresh_token;
+    try {
+      const newAccessToken = await require('./refreshToken').refreshAccessToken(refreshToken);
+
+      const updatedTokenData = {
+        ...tokenData,
+        access_token: newAccessToken,
+        updated_at: new Date().toISOString(),
+      };
+
+      saveToken(updatedTokenData);
+
+      console.log('Token mới đã được lấy và lưu thành công.');
+      return newAccessToken;
+    } catch (error) {
+      console.error('Lỗi khi refresh token:', error.message);
+      return null;
+    }
+  }
+
+  console.log('Access token vẫn còn hạn, tiếp tục sử dụng.');
+  return tokenData.access_token;
+}
+
 module.exports = {
   saveVerifier,
   getVerifier,
   saveToken,
-  getToken
+  getToken,
+  getAccessToken
 };
