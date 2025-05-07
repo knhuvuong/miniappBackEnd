@@ -27,5 +27,5 @@ const authorizeUrl = `https://oauth.zaloapp.com/v4/oa/permission?` +
   `&state=${state}` +
   `&code_challenge_method=S256`;
 
-console.log('Gửi URL này cho admin OA để cấp quyền:\n');
+console.log('URL cho admin OA để cấp quyền:\n');
 console.log(authorizeUrl);

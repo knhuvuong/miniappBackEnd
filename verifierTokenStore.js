@@ -4,7 +4,7 @@ const path = require('path');
 const filePath = path.join(__dirname, 'verifier.json');
 const TOKEN_FILE = path.join(__dirname, 'tokenStore.json');
 
-// ===== Verifier Store =====
+//lưu verifier
 function readStore() {
   if (!fs.existsSync(filePath)) return {};
   return JSON.parse(fs.readFileSync(filePath, 'utf-8') || '{}');
@@ -24,7 +24,7 @@ function getVerifier(state) {
   return readStore()[state];
 }
 
-// ===== Token Store =====
+//lưu access_token
 function saveToken(newData) {
   let oldData = {};
   if (fs.existsSync(TOKEN_FILE)) {
@@ -51,8 +51,7 @@ function getToken() {
   return JSON.parse(content);
 }
 
-// ===== Token Expiry Check =====
-
+//kiểm tra exp của token
 function getTokenExpiryTime(updatedAt, expiresIn) {
   const updatedAtDate = new Date(updatedAt);
   return updatedAtDate.getTime() + expiresIn * 1000; 
@@ -110,5 +109,7 @@ module.exports = {
   getVerifier,
   saveToken,
   getToken,
-  getAccessToken
+  getAccessToken,
+  isTokenExpired
 };
+ 

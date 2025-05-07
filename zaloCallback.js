@@ -43,10 +43,9 @@ app.get('/zalo/callback', async (req, res) => {
 
     console.log('ACCESS TOKEN:', tokenData.access_token);
     console.log('REFRESH TOKEN:', tokenData.refresh_token);
-    console.log('OA ID:', tokenData.oa_id);
     console.log('Hết hạn sau (giây):', tokenData.expires_in);
     
-    res.send('Lấy access token thành công! Xem console để biết thêm chi tiết.');
+    res.send('Lấy access token thành công!');
 
   } catch (error) {
     console.error('Error khi gọi API lấy access token:', error.response?.data || error.message);

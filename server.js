@@ -8,18 +8,50 @@ const axios = require("axios");
 const cron = require('node-cron');
 const zaloCallback = require('./zaloCallback');
 const refreshAccessToken = require('./refreshToken');
-const { getToken } = require('./verifierTokenStore');
+const { getToken, isTokenExpired } = require('./verifierTokenStore');
 const app = express();
 
-cron.schedule('0 0 * * *', async () => {
+async function checkAndRefreshTokenOnStartup() {
     const tokenData = getToken();
+
+    if (!tokenData) {
+        console.warn('Không tìm thấy token, bạn cần đăng nhập lại!');
+        return;
+    }
+
+    if (isTokenExpired()) {
+        console.log('Token đã hết hạn hoặc gần hết hạn, tiến hành làm mới token...');
+        const refreshToken = tokenData.refresh_token;
+        try {
+            const newAccessToken = await require('./refreshToken')(refreshToken);
+            const updatedTokenData = {
+                ...tokenData,
+                access_token: newAccessToken,
+                updated_at: new Date().toISOString(),
+            };
+            saveToken(updatedTokenData);
+            console.log('Token mới đã được lấy và lưu thành công.');
+        } catch (error) {
+            console.error('Lỗi khi làm mới token:', error.message);
+        }
+    } else {
+        console.log('Access token vẫn còn hạn sử dụng');
+    }
+}
+
+// Kiểm tra token khi khởi động
+checkAndRefreshTokenOnStartup();
+
+//mỗi 24h 
+cron.schedule('0 0 * * *', async () => {
     console.log(`----------Thực hiện refresh lúc ${new Date().toLocaleString()}----------`);
+    const tokenData = getToken();
     if (!tokenData?.refresh_token) return console.log('Chưa có refresh_token để làm mới');
 
     try {
-        await refreshAccessToken(tokenData.refresh_token);
+        await require('./refreshToken').refreshAccessToken(tokenData.refresh_token);
     } catch (err) {
-        console.error('Refresh thất bại');
+        console.error('Refresh thất bại', err.message);
     }
 });
 
@@ -49,7 +81,7 @@ const generateOTP = () => {
 
 app.use(bodyParser.json());
 
-app.use(cors()); 
+app.use(cors());
 
 app.use('/', zaloCallback);
 
@@ -445,7 +477,7 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         if (zaloAccId && Sdt) {
             const znsPayload = {
                 phone: Sdt.startsWith('0') ? `84${Sdt.slice(1)}` : Sdt,
-                template_id: "426499", 
+                template_id: "426499",
                 template_data: {
                     ten_sinh_vien: HoTen,
                     ma_sinh_vien: MaSV,
@@ -678,7 +710,7 @@ app.post('/api/GopY', async (req, res) => {
 
         if (checkZaloIdResult.recordset.length === 0) {
             return res.status(400).send('ZaloId không tồn tại');
-        } 
+        }
 
         const result = await pool.request().query(`
             SELECT @@SERVERNAME AS ServerName, DB_NAME() AS   DatabaseName
@@ -733,7 +765,6 @@ app.get("/api/ChiTietBanTin", async (req, res) => {
 
 
 //số lượng theo khóa ngành địa chỉ
-
 
 
 //----------------------------------------Zalo------------------------------------//
@@ -810,8 +841,8 @@ app.post('/api/Zalo/sendbroadcast', async (req, res) => {
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
     const {
-        gender,       
-        cities,       
+        gender,
+        cities,
         attachment_id
     } = req.body;
 
@@ -1299,7 +1330,7 @@ app.get('/api/Zalo/template-info', async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);
