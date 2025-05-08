@@ -1,7 +1,9 @@
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
 const express = require('express');
 const axios = require('axios');
 const qs = require('qs');
-const { getVerifier, saveToken } = require('../js/verifierTokenStore');
+const { getVerifier, saveToken } = require('../OAZalo/verifierTokenStore');
 const app = express();
 
 const APP_ID = process.env.ZALO_APP_ID;
@@ -38,12 +40,11 @@ app.get('/zalo/callback', async (req, res) => {
       }
     );
 
-    const tokenData = response.data;
-    saveToken(tokenData);
+    console.log('Zalo API response:', response.data);
 
-    console.log('ACCESS TOKEN:', tokenData.access_token);
-    console.log('REFRESH TOKEN:', tokenData.refresh_token);
-    console.log('Hết hạn sau (giây):', tokenData.expires_in);
+    const tokenData = response.data;
+
+    saveToken(tokenData);
     
     res.send('Lấy access token thành công!');
 

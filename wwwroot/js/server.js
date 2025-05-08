@@ -6,9 +6,10 @@ const cors = require('cors');
 const nodemailer = require("nodemailer");
 const axios = require("axios");
 const cron = require('node-cron');
-const zaloCallback = require('../js/zaloCallback');
-const refreshAccessToken = require('../js/refreshToken');
-const { getToken, isTokenExpired } = require('../js/verifierTokenStore');
+const zaloCallback = require('../js/OAZalo/zaloCallback');
+const { saveToken } = require('../js/OAZalo/verifierTokenStore')
+const refreshAccessToken = require('../js/OAZalo/refreshToken');
+const { getToken, isTokenExpired } = require('../js/OAZalo/verifierTokenStore');
 const app = express();
 
 async function checkAndRefreshTokenOnStartup() {
@@ -23,12 +24,14 @@ async function checkAndRefreshTokenOnStartup() {
         console.log('Token đã hết hạn hoặc gần hết hạn, tiến hành làm mới token...');
         const refreshToken = tokenData.refresh_token;
         try {
-            const newAccessToken = await require('../wwwroot/refreshToken')(refreshToken);
+            const response = await refreshAccessToken(refreshToken);
             const updatedTokenData = {
                 ...tokenData,
-                access_token: newAccessToken,
+                access_token: response.access_token,
+                refresh_token: response.refresh_token,
                 updated_at: new Date().toISOString(),
             };
+            console.log(response)
             saveToken(updatedTokenData);
             console.log('Token mới đã được lấy và lưu thành công.');
         } catch (error) {
@@ -49,7 +52,7 @@ cron.schedule('0 0 * * *', async () => {
     if (!tokenData?.refresh_token) return console.log('Chưa có refresh_token để làm mới');
 
     try {
-        await require('./refreshToken').refreshAccessToken(tokenData.refresh_token);
+        await require('./OAZalo/refreshToken').refreshAccessToken(tokenData.refresh_token);
     } catch (err) {
         console.error('Refresh thất bại', err.message);
     }
@@ -74,7 +77,7 @@ const transporter = nodemailer.createTransport({
         pass: process.env.EMAIL_PASS,
     },
 });
-
+ 
 const generateOTP = () => {
     return Math.floor(10000 + Math.random() * 90000).toString();
 };

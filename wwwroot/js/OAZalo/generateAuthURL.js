@@ -1,6 +1,7 @@
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
 const crypto = require('crypto');
-const { saveVerifier } = require('../js/verifierTokenStore');
+const { saveVerifier } = require('../OAZalo/verifierTokenStore');
 
 function generatePKCE() {
   const code_verifier = crypto.randomBytes(64).toString('base64url').slice(0, 43);

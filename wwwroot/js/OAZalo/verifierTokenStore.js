@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 
-const filePath = path.join(__dirname, '../verifier.json');
-const TOKEN_FILE = path.join(__dirname, '../tokenStore.json');
+const filePath = path.join(__dirname, '../../verifier.json');
+const TOKEN_FILE = path.join(__dirname, '../../tokenStore.json');
 
 //lưu verifier
 function readStore() {
@@ -26,23 +26,20 @@ function getVerifier(state) {
 
 //lưu access_token
 function saveToken(newData) {
-  let oldData = {};
-  if (fs.existsSync(TOKEN_FILE)) {
-    try {
-      oldData = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf-8') || '{}');
-    } catch (e) {
-      console.warn('Không đọc được token cũ:', e.message);
-    }
-  }
-
-  const merged = {
-    ...oldData,
-    ...newData,
+  const tokenData = {
+    access_token: newData.access_token,
+    refresh_token: newData.refresh_token,
+    expires_in: newData.expires_in,
     updated_at: new Date().toISOString()
   };
 
-  fs.writeFileSync(TOKEN_FILE, JSON.stringify(merged, null, 2));
-  console.log('Token đã được cập nhật vào tokenStore.json');
+  try {
+    // Lưu token vào tokenStore.json
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokenData, null, 2));
+    console.log('Token đã được cập nhật vào tokenStore.json');
+  } catch (error) {
+    console.error('Lỗi khi lưu token:', error.message);
+  }
 }
 
 function getToken() {

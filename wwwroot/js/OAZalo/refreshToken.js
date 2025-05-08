@@ -1,8 +1,11 @@
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../../../.env') });
 const axios = require('axios');
 const qs = require('qs');
-const { saveToken } = require('../js/verifierTokenStore');
+const { saveToken } = require('../OAZalo/verifierTokenStore');
 
 const APP_ID = process.env.ZALO_APP_ID;
+console.log("Zalo app id:" + APP_ID)
 const SECRET_KEY = process.env.ZALO_APP_SECRET;
 
 async function refreshAccessToken(currentRefreshToken) {
@@ -25,6 +28,7 @@ async function refreshAccessToken(currentRefreshToken) {
     );
 
     const tokenData = response.data;
+    console.log("response trả về:" + tokenData)
 
     saveToken(tokenData);
 
