@@ -40,8 +40,6 @@ app.get('/zalo/callback', async (req, res) => {
       }
     );
 
-    console.log('Zalo API response:', response.data);
-
     const tokenData = response.data;
 
     saveToken(tokenData);

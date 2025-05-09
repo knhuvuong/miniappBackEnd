@@ -36,7 +36,6 @@ function saveToken(newData) {
   try {
     // Lưu token vào tokenStore.json
     fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokenData, null, 2));
-    console.log('Token đã được cập nhật vào tokenStore.json');
   } catch (error) {
     console.error('Lỗi khi lưu token:', error.message);
   }

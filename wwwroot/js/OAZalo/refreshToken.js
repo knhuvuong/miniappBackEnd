@@ -27,7 +27,6 @@ async function refreshAccessToken(currentRefreshToken) {
     );
 
     const tokenData = response.data;
-    console.log("response trả về:" + tokenData)
 
     saveToken(tokenData);
 
