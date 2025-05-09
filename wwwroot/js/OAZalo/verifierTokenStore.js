@@ -43,8 +43,18 @@ function saveToken(newData) {
 
 function getToken() {
   if (!fs.existsSync(TOKEN_FILE)) return null;
-  const content = fs.readFileSync(TOKEN_FILE, 'utf-8');
-  return JSON.parse(content);
+
+  const content = fs.readFileSync(TOKEN_FILE, 'utf-8').trim();
+  if (!content) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    console.error('Lỗi khi parse token từ file:', error.message);
+    return null;
+  }
 }
 
 //kiểm tra exp của token

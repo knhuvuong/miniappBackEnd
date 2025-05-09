@@ -16,7 +16,7 @@ async function checkAndRefreshTokenOnStartup() {
     const tokenData = getToken();
 
     if (!tokenData) {
-        console.warn('Không tìm thấy token, bạn cần đăng nhập lại!');
+        console.warn('Không tìm thấy token, bạn cần đăng nhập lại để lấy access_token mới!');
         return;
     }
 
