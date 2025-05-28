@@ -41,6 +41,7 @@ app.get('/zalo/callback', async (req, res) => {
     );
 
     const tokenData = response.data;
+    console.log("-----Thông tin token từ Zalo:-----", JSON.stringify(tokenData, null, 2));  
 
     saveToken(tokenData);
     

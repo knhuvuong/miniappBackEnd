@@ -10,17 +10,21 @@ const zaloCallback = require('../js/OAZalo/zaloCallback');
 const { saveToken } = require('../js/OAZalo/verifierTokenStore')
 const refreshAccessToken = require('../js/OAZalo/refreshToken');
 const { getToken, isTokenExpired } = require('../js/OAZalo/verifierTokenStore');
+const { getConnection } = require('./db');
+const cheerio = require('cheerio');
+
 const app = express();
 
 async function checkAndRefreshTokenOnStartup() {
-    const tokenData = getToken();
+    const tokenData = await await getToken();
+    // console.log("-----Thông tin token từ DB:-----", JSON.stringify(tokenData, null, 2));
 
     if (!tokenData) {
         console.warn('Không tìm thấy token, bạn cần đăng nhập lại để lấy access_token mới!');
         return;
     }
 
-    if (isTokenExpired()) {
+    if (await isTokenExpired(tokenData)) {
         console.log('Token đã hết hạn hoặc gần hết hạn, tiến hành làm mới token...');
         const refreshToken = tokenData.refresh_token;
         try {
@@ -31,9 +35,9 @@ async function checkAndRefreshTokenOnStartup() {
                 refresh_token: response.refresh_token,
                 updated_at: new Date().toISOString(),
             };
-            console.log(response)
+
             saveToken(updatedTokenData);
-            console.log('Token mới đã được lấy và lưu thành công.');
+
         } catch (error) {
             console.error('Lỗi khi làm mới token:', error.message);
         }
@@ -42,42 +46,44 @@ async function checkAndRefreshTokenOnStartup() {
     }
 }
 
-// Kiểm tra token khi khởi động
+// kiểm tra token
 checkAndRefreshTokenOnStartup();
 
 //mỗi 24h 
 cron.schedule('0 0 * * *', async () => {
     console.log(`----------Thực hiện refresh lúc ${new Date().toLocaleString()}----------`);
-    const tokenData = getToken();
+    const tokenData = await getToken();
     if (!tokenData?.refresh_token) return console.log('Chưa có refresh_token để làm mới');
 
     try {
-        await require('./OAZalo/refreshToken').refreshAccessToken(tokenData.refresh_token);
+        await refreshAccessToken(tokenData.refresh_token);
     } catch (err) {
         console.error('Refresh thất bại', err.message);
     }
 });
 
-const dbConfigSecond = {
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    server: process.env.DB_SERVER,
-    port: parseInt(process.env.DB_PORT),
-    database: process.env.DB_NAME,
-    options: {
-        encrypt: false,
-        trustServerCertificate: true
-    }
-};
+// const dbConfigSecond = {
+//     user: process.env.DB_USER,
+//     password: process.env.DB_PASSWORD,
+//     server: process.env.DB_SERVER,
+//     port: parseInt(process.env.DB_PORT),
+//     database: process.env.DB_NAME,
+//     options: {
+//         encrypt: false,
+//         trustServerCertificate: true
+//     }
+// };
 
 const transporter = nodemailer.createTransport({
-    service: "gmail",
+    host: process.env.SMTP_SENDER,
+    port: parseInt(process.env.EMAIL_PORT, 10),
+    secure: false,
     auth: {
         user: process.env.EMAIL_USER,
         pass: process.env.EMAIL_PASS,
     },
 });
- 
+
 const generateOTP = () => {
     return Math.floor(10000 + Math.random() * 90000).toString();
 };
@@ -90,6 +96,7 @@ app.use('/', zaloCallback);
 
 //gửi otp 
 app.post("/api/sendOTP", async (req, res) => {
+
     const { mail } = req.body;
     console.log(mail)
     const now = new Date();
@@ -105,8 +112,7 @@ app.post("/api/sendOTP", async (req, res) => {
     const verify = 0
 
     try {
-        const pool = new sql.ConnectionPool(dbConfigSecond);
-        await pool.connect();
+        const pool = await getConnection();
 
         const existingOTP = await pool.request()
             .input('Mail', sql.NVarChar, mail)
@@ -126,7 +132,7 @@ app.post("/api/sendOTP", async (req, res) => {
             .query(`INSERT INTO Zalo_OTP (Mail, OTP, NgayTao, NgayHetHan, TrangThai) VALUES (@Mail, @OTP, @NgayTao, @NgayHetHan, @TrangThai)`);
 
         const mailOptions = {
-            from: "nhukhanhtv052@gmail.com",
+            from: process.env.EMAIL_SENDER,
             to: mail,
             subject: "Mã OTP xác thực của bạn",
             text: `Mã OTP của bạn là: ${otp}. Vui lòng không chia sẻ mã này với bất kỳ ai!`,
@@ -153,8 +159,7 @@ app.post("/api/verifyOTP", async (req, res) => {
     const { mail, otp } = req.body;
 
     try {
-        const pool = new sql.ConnectionPool(dbConfigSecond);
-        await pool.connect();
+        const pool = await getConnection();
 
         const result = await pool.request()
             .input('Mail', sql.NVarChar, mail)
@@ -185,8 +190,7 @@ app.post("/api/verifyOTP", async (req, res) => {
 app.get('/api/SinhViens/search', async (req, res) => {
     const { keyword, page = 1, pageSize = 20 } = req.query;
     try {
-        const pool = new sql.ConnectionPool(dbConfigSecond);
-        await pool.connect();
+        const pool = await getConnection();
 
         const request = pool.request();
 
@@ -245,8 +249,7 @@ app.get('/api/SinhViens/search', async (req, res) => {
 app.get('/api/SinhViens/Zalo/search', async (req, res) => {
     const { keyword, page = 1, pageSize = 20 } = req.query;
     try {
-        const pool = new sql.ConnectionPool(dbConfigSecond);
-        await pool.connect();
+        const pool = await getConnection();
 
         const request = pool.request();
 
@@ -310,8 +313,7 @@ app.get('/api/SinhViens/list', async (req, res) => {
     }
 
     try {
-        const pool = new sql.ConnectionPool(dbConfigSecond);
-        await pool.connect();
+        const pool = await getConnection();
 
         const request = pool.request();
 
@@ -352,15 +354,15 @@ app.get('/api/SinhViens/list', async (req, res) => {
 //thông tin của 1 user (truyền zaloId vào)
 app.get('/api/SinhViens/info', async (req, res) => {
     const { ZaloID } = req.query;
-    // console.log("Received ZaloID:", ZaloID);
 
     if (!ZaloID) {
         return res.status(400).json({ error: 'ZaloID không được để trống!' });
     }
 
     let pool;
+
     try {
-        pool = await sql.connect(dbConfigSecond);
+        const pool = await getConnection();
 
         const query = 'SELECT * FROM ZaloAccount WHERE ZaloID = @ZaloID';
         const result = await pool.request()
@@ -368,7 +370,7 @@ app.get('/api/SinhViens/info', async (req, res) => {
             .query(query);
 
         if (result.recordset.length === 0) {
-            return res.status(404).json({ error: 'Chưa có thông tin!' });
+            return res.status(404).json({ error: 'Chưa có thông tin tài khoản!' });
         }
 
         res.json({ profile: result.recordset[0] });
@@ -380,15 +382,47 @@ app.get('/api/SinhViens/info', async (req, res) => {
     }
 });
 
+//kiểm tra user tồn tại
+app.get('/api/SinhViens/checkUserExist', async (req, res) => {
+    const { ZaloID } = req.query;
+
+    if (!ZaloID) {
+        return res.status(400).json({ error: 'ZaloID không được để trống!' });
+    }
+
+    let pool;
+
+    try {
+        const pool = await getConnection();
+
+        const query = 'SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID';
+        const result = await pool.request()
+            .input('ZaloID', sql.VarChar, ZaloID)
+            .query(query);
+
+        if (result.recordset.length === 0) {
+            return res.status(404).json({ error: 'Chưa có thông tin tài khoản!' });
+        }
+
+        res.json({ profile: result.recordset[0] });
+    } catch (err) {
+        console.error('SQL Server Error:', err.message);
+        res.status(500).json({ error: 'Internal Server Error', details: err.message });
+    } finally {
+        if (pool) pool.close();
+    }
+});
+
+//tạo thông tin mới
 app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
     const {
         SVTN_ID, MaSV, MaLop, HoTen, Sdt, Email, Khoa, ChucVu,
         DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien
     } = req.body;
 
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     console.log(MaSV)
 
@@ -401,9 +435,9 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
 
     let pool;
     try {
-        pool = await sql.connect(dbConfigSecond);
+        const pool = await getConnection();
 
-        // 🔍 Tạo request riêng để check tồn tại ZaloID
+        // Tạo request riêng để check tồn tại ZaloID
         const checkRequest = pool.request();
         checkRequest.input('ZaloID', sql.NVarChar, ZaloID);
         const checkZaloID = await checkRequest.query(`
@@ -413,7 +447,7 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         let zaloAccId;
 
         if (checkZaloID.recordset.length > 0) {
-            // ✅ Đã tồn tại - UPDATE
+            // Đã tồn tại - UPDATE
             const updateRequest = pool.request();
             updateRequest.input('ZaloID', sql.NVarChar, ZaloID)
                 .input('SVTN_ID', sql.Int, SVTN_ID)
@@ -443,7 +477,7 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
             zaloAccId = checkZaloID.recordset[0].ID;
 
         } else {
-            // 🚀 Chưa tồn tại - INSERT mới
+            // Chưa tồn tại - INSERT mới
             const insertRequest = pool.request();
             insertRequest
                 .input('SVTN_ID', sql.Int, SVTN_ID)
@@ -501,9 +535,9 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
 
                 const znsData = await znsRes.json();
 
-                console.log("📨 Kết quả gửi ZNS:", znsData);
+                console.log("Kết quả gửi ZNS:", znsData);
             } catch (znsErr) {
-                console.error("⚠️ Gửi ZNS thất bại:", znsErr);
+                console.error("Gửi ZNS thất bại:", znsErr);
             }
         }
 
@@ -513,31 +547,30 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         });
 
     } catch (err) {
-        console.error("🔥 Lỗi xử lý:", err);
+        console.error("Lỗi xử lý:", err);
         res.status(500).send('Internal Server Error');
     } finally {
         pool && pool.close();
     }
 });
+//     const id = parseInt(req.params.id, 10);
 
-app.delete('/api/SinhViens/ZaloAccount/:id', (req, res) => {
-    const id = parseInt(req.params.id, 10);
+//     if (!id) {
+//         return res.status(400).send("Thiếu ID để xoá.");
+//     }
 
-    if (!id) {
-        return res.status(400).send("Thiếu ID để xoá.");
-    }
+//     const index = zaloAccounts.findIndex(acc => acc.id === id);
 
-    const index = zaloAccounts.findIndex(acc => acc.id === id);
+//     if (index === -1) {
+//         return res.status(404).send("Không tìm thấy tài khoản để xoá.");
+//     }
 
-    if (index === -1) {
-        return res.status(404).send("Không tìm thấy tài khoản để xoá.");
-    }
-
-    zaloAccounts.splice(index, 1);
-    return res.status(200).send("Đã xoá tài khoản thành công.");
-});
+//     zaloAccounts.splice(index, 1);
+//     return res.status(200).send("Đã xoá tài khoản thành công.");
+// });
 
 // Cập nhật thông tin sinh viên
+
 app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
     const { MaSV, MaLop, HoTen, Sdt, Email, Khoa, ChucVu, DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien } = req.body;
 
@@ -549,8 +582,7 @@ app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
 
     let pool;
     try {
-        pool = new sql.ConnectionPool(dbConfigSecond);
-        await pool.connect();
+        const pool = await getConnection();
 
         const request = pool.request();
         request.input('ZaloID', sql.NVarChar, ZaloID);
@@ -615,7 +647,7 @@ app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
 
 app.get('/api/BanTinMoiNhatCSV', async (req, res) => {
     try {
-        const pool = await sql.connect(dbConfigSecond);
+        const pool = await getConnection();
         const result = await pool.request().query('SELECT TOP 5 * FROM Zalo_BanTinCuuSV ORDER BY NgayTao DESC');
         res.json(result.recordset);
     } catch (err) {
@@ -633,7 +665,7 @@ app.get('/api/TatCaBanTin', async (req, res) => {
     }
 
     try {
-        const pool = await sql.connect(dbConfigSecond);
+        const pool = await getConnection();
         const request = pool.request();
 
         let query = 'SELECT * FROM Zalo_BanTinCuuSV';
@@ -679,7 +711,7 @@ app.get('/api/ChiTietBanTin', async (req, res) => {
     }
 
     try {
-        const pool = await sql.connect(dbConfigSecond);
+        const pool = await getConnection();
         const result = await pool
             .request()
             .input('ID', sql.Int, id)
@@ -705,7 +737,7 @@ app.post('/api/GopY', async (req, res) => {
     }
 
     try {
-        const pool = await sql.connect(dbConfigSecond);
+        const pool = await getConnection();
 
         const checkZaloIdResult = await pool.request()
             .input('ZaloId', sql.VarChar, ZaloId)
@@ -762,6 +794,95 @@ app.get("/api/ChiTietBanTin", async (req, res) => {
     }
 });
 
+app.get('/api/jobs', async (req, res) => {
+    try {
+        const url = 'https://dichvuvieclam.tvu.edu.vn/';
+        const { data } = await axios.get(url);
+        const $ = cheerio.load(data);
+
+        const jobs = [];
+
+        $('tr').each((i, el) => {
+            const tds = $(el).find('td');
+            if (tds.length >= 4) {
+                const anchor = $(tds[0]).find('a');
+                const jobTitle = anchor.find('strong').text().trim();
+                const href = anchor.attr('href')?.trim();
+
+                const td0Text = $(tds[0]).text().trim().replace(jobTitle, '').replace(/[\n\r"]/g, '').trim();
+                const company = td0Text || 'Không rõ';
+
+                const location = $(tds[1]).text().trim();
+                const salary = $(tds[2]).text().trim();
+                const datePosted = $(tds[3]).text().trim();
+
+                if (jobTitle) {
+                    jobs.push({
+                        jobTitle,
+                        company,
+                        location,
+                        salary,
+                        datePosted,
+                        link: href || null
+                    });
+                }
+            }
+        });
+
+        res.json({
+            success: true,
+            data: jobs
+        });
+    } catch (error) {
+        console.error('Lỗi crawl:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi crawl dữ liệu'
+        });
+    }
+});
+
+app.get('/api/job-detail', async (req, res) => {
+    try {
+        const { url } = req.query;
+        if (!url) {
+            return res.status(400).json({
+                success: false,
+                message: 'Thiếu tham số url'
+            });
+        }
+
+        const decodedUrl = decodeURIComponent(url);
+        const { data } = await axios.get(decodedUrl);
+        const $ = cheerio.load(data);
+
+        const iframeSrc = $('.ead-preview iframe').attr('src');
+        if (!iframeSrc) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy nội dung chi tiết'
+            });
+        }
+
+        const pdfMatch = iframeSrc.match(/url=([^&]+)/);
+        const pdfUrl = pdfMatch ? decodeURIComponent(pdfMatch[1]) : null;
+
+        res.json({
+            success: true,
+            data: {
+                viewerUrl: iframeSrc.startsWith('http') ? iframeSrc : 'https:' + iframeSrc,
+                pdfUrl
+            }
+        });
+    } catch (error) {
+        console.error('Lỗi crawl chi tiết:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy chi tiết bài đăng'
+        });
+    }
+});
+
 //--------------------------------------Thống kê-----------------------------------//
 
 //số lượng csv có thông tin tài khoản mini app
@@ -778,9 +899,9 @@ app.get('/api/Zalo/followers', async (req, res) => {
         const offset = parseInt(req.query.offset) || 0;
         const count = parseInt(req.query.count) || 20;
 
-        const tokenData = getToken();
+        const tokenData = await getToken();
         const accessToken = tokenData.access_token
-        
+
 
         if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -810,9 +931,9 @@ app.get('/api/Zalo/detailfollower', async (req, res) => {
             return res.status(400).json({ error: 'Thiếu user_id trong yêu cầu' });
         }
 
-        const tokenData = getToken();
+        const tokenData = await getToken();
         const accessToken = tokenData.access_token
-        
+
 
         if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -837,9 +958,9 @@ app.get('/api/Zalo/detailfollower', async (req, res) => {
 
 //gửi broadcast
 app.post('/api/Zalo/sendbroadcast', async (req, res) => {
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -899,9 +1020,9 @@ app.post('/api/Zalo/sendbroadcast', async (req, res) => {
 
 //tạo bài viết
 app.post('/api/Zalo/create-article', async (req, res) => {
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -949,9 +1070,9 @@ app.post('/api/Zalo/create-article', async (req, res) => {
 
 //chỉnh sửa bài viết
 app.post("/api/Zalo/update-article", async (req, res) => {
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -1013,9 +1134,9 @@ app.post("/api/Zalo/remove", async (req, res) => {
     }
 
     try {
-        const tokenData = getToken();
+        const tokenData = await getToken();
         const accessToken = tokenData.access_token
-        
+
 
         if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -1047,9 +1168,9 @@ app.get("/api/Zalo/getdetail", async (req, res) => {
             return res.status(400).json({ error: 'Thiếu id trong yêu cầu' });
         }
 
-        const tokenData = getToken();
+        const tokenData = await getToken();
         const accessToken = tokenData.access_token
-        
+
 
         if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -1074,9 +1195,9 @@ app.get("/api/Zalo/getdetail", async (req, res) => {
 
 //lấy danh sách bài viết
 app.get('/api/Zalo/articles', async (req, res) => {
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -1110,9 +1231,9 @@ app.get('/api/Zalo/articles', async (req, res) => {
 //lấy danh sách template ZNS
 app.get('/api/Zalo/templates', async (req, res) => {
 
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -1150,9 +1271,9 @@ app.get('/api/Zalo/templates', async (req, res) => {
 //lấy chi tiết template ZNS
 app.get('/api/Zalo/detailtemplates', async (req, res) => {
 
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -1188,9 +1309,9 @@ app.get('/api/Zalo/detailtemplates', async (req, res) => {
 
 //gửi ZNS (develoment mode), phone phải là của quản trị viên của OA hoặc của mini app
 app.post('/api/Zalo/send-devtemplate', async (req, res) => {
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -1241,9 +1362,9 @@ app.post('/api/Zalo/send-devtemplate', async (req, res) => {
 
 //gửi ZNS
 app.post('/api/Zalo/send-template', async (req, res) => {
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
@@ -1292,9 +1413,9 @@ app.post('/api/Zalo/send-template', async (req, res) => {
 
 //lấy dữ liệu mẫu của template
 app.get('/api/Zalo/template-info', async (req, res) => {
-    const tokenData = getToken();
+    const tokenData = await getToken();
     const accessToken = tokenData.access_token
-    
+
 
     if (!tokenData.access_token) return res.status(401).json({ error: 'Thiếu access_token' });
 
