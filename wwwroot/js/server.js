@@ -62,6 +62,20 @@ cron.schedule('0 0 * * *', async () => {
     }
 });
 
+cron.schedule('0 0 * * *', async () => {
+    console.log("🔄 Đang xoá OTP hết hạn...");
+
+    try {
+        const pool = await getConnection();
+        await pool.request().query(`
+            DELETE FROM Zalo_OTP WHERE NgayHetHan < GETDATE()
+        `);
+        console.log("✅ Đã xoá xong OTP hết hạn.");
+    } catch (err) {
+        console.error("❌ Lỗi khi xoá OTP:", err);
+    }
+});
+
 // const dbConfigSecond = {
 //     user: process.env.DB_USER,
 //     password: process.env.DB_PASSWORD,
@@ -124,7 +138,6 @@ app.post("/api/sendOTP", async (req, res) => {
 
         await pool.request()
             .input('Mail', sql.NVarChar, mail)
-            // .input('ZaloAcc_ID', sql.Int, zaloAccId)
             .input('OTP', sql.NVarChar, otp)
             .input('NgayTao', sql.DateTime, createAtUTC)
             .input('NgayHetHan', sql.DateTime, expiresAtUTC)
