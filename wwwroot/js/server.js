@@ -49,7 +49,7 @@ async function checkAndRefreshTokenOnStartup() {
 // kiểm tra token
 checkAndRefreshTokenOnStartup();
 
-//mỗi 24h 
+//24h
 cron.schedule('0 0 * * *', async () => {
     console.log(`----------Thực hiện refresh lúc ${new Date().toLocaleString()}----------`);
     const tokenData = await getToken();
@@ -75,18 +75,6 @@ cron.schedule('0 0 * * *', async () => {
         console.error("❌ Lỗi khi xoá OTP:", err);
     }
 });
-
-// const dbConfigSecond = {
-//     user: process.env.DB_USER,
-//     password: process.env.DB_PASSWORD,
-//     server: process.env.DB_SERVER,
-//     port: parseInt(process.env.DB_PORT),
-//     database: process.env.DB_NAME,
-//     options: {
-//         encrypt: false,
-//         trustServerCertificate: true
-//     }
-// };
 
 const transporter = nodemailer.createTransport({
     host: process.env.SMTP_SENDER,
@@ -202,58 +190,118 @@ app.post("/api/verifyOTP", async (req, res) => {
 //tìm kiếm thông tin cựu sinh viên trong db
 app.get('/api/SinhViens/search', async (req, res) => {
     const { keyword, page = 1, pageSize = 20 } = req.query;
+
     try {
         const pool = await getConnection();
-
         const request = pool.request();
 
-        let query = 'SELECT STT, SinhVien_ID , MaSV, MaLop, TenDayDu, Nam, TenNganh FROM SinhVien_Edu_TotNghiep_27042024 WHERE 1=1';
+        let query = `
+            SELECT 
+                sv.ID,
+                sv.MSSV,
+                sv.FullName,
+                ndt.TenNganh,
+                lnh.NienKhoa,
+                sv.NgaySinh,
+                sv.HienDienSV
+            FROM SinhVien sv
+            JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
+            JOIN DT_LopNhapHoc lnh ON lhsv.LopNhapHoc_ID = lnh.ID
+            JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
+            WHERE sv.HienDienSV = 3
+        `;
+
+        let countQuery = `
+            SELECT COUNT(*) AS totalCount
+            FROM SinhVien sv
+            JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
+            JOIN DT_LopNhapHoc lnh ON lhsv.LopNhapHoc_ID = lnh.ID
+            JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
+            WHERE sv.HienDienSV = 3
+        `;
+
+        function convertToISODate(dateStr) {
+            const parts = dateStr.split('-');
+            if (parts.length === 3) {
+                const [day, month, year] = parts;
+                if (
+                    /^\d{2}$/.test(day) &&
+                    /^\d{2}$/.test(month) &&
+                    /^\d{4}$/.test(year)
+                ) {
+                    return `${year}-${month}-${day}`;
+                }
+            }
+            return null;
+        }
 
         if (keyword) {
-            if (!isNaN(keyword)) {
-                query += ' AND (MaSV LIKE @keyword OR Nam LIKE @keyword)';
-                request.input('keyword', sql.NVarChar, `%${keyword}%`);
-            } else {
-                query += ' AND (TenNganh LIKE @keyword OR TenDayDu LIKE @keyword)';
-                request.input('keyword', sql.NVarChar, `%${keyword}%`);
+            const parts = keyword.trim().split(/\s+/);
+
+            let nameParts = [];
+            let dob = null;
+
+            for (const part of parts) {
+                if (/^\d{2}-\d{2}-\d{4}$/.test(part)) {
+                    dob = convertToISODate(part);
+                } else {
+                    nameParts.push(part);
+                }
+
+            }
+
+            if (nameParts.length > 0) {
+                const nameSearch = nameParts.join(' ');
+                query += ' AND sv.FullName LIKE @fullName';
+                countQuery += ' AND sv.FullName LIKE @fullName';
+                request.input('fullName', sql.NVarChar, `%${nameSearch}%`);
+            }
+
+            if (dob) {
+                query += ' AND sv.NgaySinh = @ngaySinh';
+                countQuery += ' AND sv.NgaySinh = @ngaySinh';
+                request.input('ngaySinh', sql.Date, dob);
             }
         }
 
         const offset = (page - 1) * pageSize;
-        query += ` ORDER BY MaSV OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY`;
+        query += ' ORDER BY lnh.NienKhoa DESC OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY';
 
         request.input('offset', sql.Int, offset);
         request.input('pageSize', sql.Int, pageSize);
 
-        let totalCountQuery = 'SELECT COUNT(*) AS totalCount FROM SinhVien_Edu_TotNghiep_27042024 WHERE 1=1';
-
-        if (keyword) {
-            if (!isNaN(keyword)) {
-                totalCountQuery += ' AND (MaSV LIKE @keyword OR Nam LIKE @keyword)';
-            } else {
-                totalCountQuery += ' AND (TenNganh LIKE @keyword OR TenDayDu LIKE @keyword)';
-            }
-        }
-
         const result = await request.query(query);
-        const totalCountResult = await request.query(totalCountQuery);
+        const totalCountResult = await request.query(countQuery);
+
         const totalCount = totalCountResult.recordset[0].totalCount;
         const totalPages = Math.ceil(totalCount / pageSize);
+
+        function formatDateVN(date) {
+            const d = new Date(date);
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            return `${day}-${month}-${year}`;
+        }
+        const students = result.recordset.map(student => ({
+            ...student,
+            NgaySinh: student.NgaySinh ? formatDateVN(student.NgaySinh) : null
+        }));
 
         if (result.recordset.length === 0) {
             return res.status(404).send('Không tìm thấy sinh viên phù hợp');
         }
 
         res.json({
-            students: result.recordset,
+            students,
             totalCount,
-            page,
-            pageSize,
+            page: Number(page),
+            pageSize: Number(pageSize),
             totalPages
         });
 
     } catch (err) {
-        console.error(err);
+        console.error('Lỗi khi tìm sinh viên:', err);
         res.status(500).send('Internal Server Error');
     }
 });
@@ -429,17 +477,14 @@ app.get('/api/SinhViens/checkUserExist', async (req, res) => {
 //tạo thông tin mới
 app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
     const {
-        SVTN_ID, MaSV, MaLop, HoTen, Sdt, Email, Khoa, ChucVu,
+        SVTN_ID, MaSV, HoTen, Sdt, Email, Khoa, Nganh, ChucVu,
         DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien
     } = req.body;
 
     const tokenData = await getToken();
     const accessToken = tokenData.access_token
 
-
-    console.log(MaSV)
-
-    if (!SVTN_ID || !MaSV || !MaLop || !HoTen || !Sdt || !Email || !Khoa || !ZaloID || !AnhDaiDien) {
+    if (!SVTN_ID || !MaSV || !HoTen || !Sdt || !Email || !Khoa || !Nganh || !ZaloID || !AnhDaiDien) {
         return res.status(400).send('Thiếu thông tin bắt buộc');
     }
 
@@ -450,7 +495,6 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
     try {
         const pool = await getConnection();
 
-        // Tạo request riêng để check tồn tại ZaloID
         const checkRequest = pool.request();
         checkRequest.input('ZaloID', sql.NVarChar, ZaloID);
         const checkZaloID = await checkRequest.query(`
@@ -463,13 +507,12 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
             // Đã tồn tại - UPDATE
             const updateRequest = pool.request();
             updateRequest.input('ZaloID', sql.NVarChar, ZaloID)
-                .input('SVTN_ID', sql.Int, SVTN_ID)
                 .input('MaSV', sql.VarChar, MaSV)
-                .input('MaLop', sql.VarChar, MaLop)
                 .input('HoTen', sql.NVarChar, HoTen)
                 .input('Sdt', sql.NVarChar, Sdt)
                 .input('Email', sql.NVarChar, Email)
                 .input('Khoa', sql.NVarChar, Khoa)
+                .input('Nganh', sql.NVarChar, Nganh)
                 .input('ChucVu', sql.NVarChar, ChucVu)
                 .input('DonViCongTac', sql.NVarChar, DonViCongTac)
                 .input('ThamNien', sql.NVarChar, ThamNien)
@@ -480,8 +523,8 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
 
             await updateRequest.query(`
                 UPDATE ZaloAccount
-                SET SVTN_ID = @SVTN_ID, MaSV = @MaSV, MaLop = @MaLop, HoTen = @HoTen, Sdt = @Sdt, Email = @Email, 
-                    Khoa = @Khoa, ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, ThamNien = @ThamNien, 
+                SET MaSV = @MaSV, HoTen = @HoTen, Sdt = @Sdt, Email = @Email, 
+                    Khoa = @Khoa, Nganh = @Nganh, ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, ThamNien = @ThamNien, 
                     DiaChiLienHe = @DiaChiLienHe, AnhDaiDien = @AnhDaiDien, NgayTao = @NgayTao, 
                     NgayCapNhat = @NgayCapNhat, DaXacThuc = 0
                 WHERE ZaloID = @ZaloID
@@ -495,11 +538,11 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
             insertRequest
                 .input('SVTN_ID', sql.Int, SVTN_ID)
                 .input('MaSV', sql.VarChar, MaSV)
-                .input('MaLop', sql.VarChar, MaLop)
                 .input('HoTen', sql.NVarChar, HoTen)
                 .input('Sdt', sql.NVarChar, Sdt)
                 .input('Email', sql.NVarChar, Email)
                 .input('Khoa', sql.NVarChar, Khoa)
+                .input('Nganh', sql.NVarChar, Nganh)
                 .input('ChucVu', sql.NVarChar, ChucVu)
                 .input('DonViCongTac', sql.NVarChar, DonViCongTac)
                 .input('ThamNien', sql.NVarChar, ThamNien)
@@ -511,12 +554,12 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
 
             const insertResult = await insertRequest.query(`
                 INSERT INTO ZaloAccount (
-                    SVTN_ID, MaSV, MaLop, HoTen, Sdt, Email, Khoa, ChucVu, DonViCongTac, 
+                    SVTN_ID, MaSV, HoTen, Sdt, Email, Khoa, Nganh, ChucVu, DonViCongTac, 
                     ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien, NgayTao, NgayCapNhat, DaXacThuc
                 )
                 OUTPUT INSERTED.ID
                 VALUES (
-                    @SVTN_ID, @MaSV, @MaLop, @HoTen, @Sdt, @Email, @Khoa, @ChucVu, @DonViCongTac, 
+                    @SVTN_ID, @MaSV, @HoTen, @Sdt, @Email, @Khoa, @Nganh, @ChucVu, @DonViCongTac, 
                     @ThamNien, @DiaChiLienHe, @ZaloID, @AnhDaiDien, @NgayTao, @NgayCapNhat, 0
                 )
             `);
@@ -566,28 +609,12 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         pool && pool.close();
     }
 });
-//     const id = parseInt(req.params.id, 10);
-
-//     if (!id) {
-//         return res.status(400).send("Thiếu ID để xoá.");
-//     }
-
-//     const index = zaloAccounts.findIndex(acc => acc.id === id);
-
-//     if (index === -1) {
-//         return res.status(404).send("Không tìm thấy tài khoản để xoá.");
-//     }
-
-//     zaloAccounts.splice(index, 1);
-//     return res.status(200).send("Đã xoá tài khoản thành công.");
-// });
 
 // Cập nhật thông tin sinh viên
-
 app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
-    const { MaSV, MaLop, HoTen, Sdt, Email, Khoa, ChucVu, DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien } = req.body;
+    const { MaSV, HoTen, Sdt, Email, Khoa, Nganh, ChucVu, DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien } = req.body;
 
-    if (!MaSV || !MaLop || !HoTen || !Sdt || !Email || !Khoa || !ZaloID || !AnhDaiDien) {
+    if (!MaSV || !HoTen || !Sdt || !Email || !Khoa || !Nganh || !ZaloID || !AnhDaiDien) {
         return res.status(400).send('Thiếu thông tin bắt buộc');
     }
 
@@ -606,11 +633,11 @@ app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
             // Nếu ZaloID đã tồn tại, cập nhật thông tin
             await request
                 .input('MaSV', sql.Int, MaSV)
-                .input('MaLop', sql.VarChar, MaLop)
                 .input('HoTen', sql.NVarChar, HoTen)
                 .input('Sdt', sql.NVarChar, Sdt)
                 .input('Email', sql.NVarChar, Email)
                 .input('Khoa', sql.NVarChar, Khoa)
+                .input('Nganh', sql.NVarChar, Nganh)
                 .input('ChucVu', sql.NVarChar, ChucVu)
                 .input('DonViCongTac', sql.NVarChar, DonViCongTac)
                 .input('ThamNien', sql.NVarChar, ThamNien)
@@ -619,8 +646,8 @@ app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
                 .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
                 .query(`
                     UPDATE ZaloAccount
-                    SET MaSV = @MaSV, MaLop = @Malop, HoTen = @HoTen, Sdt = @Sdt, Email = @Email, 
-                    Khoa = @Khoa, ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, ThamNien = @ThamNien, 
+                    SET MaSV = @MaSV, HoTen = @HoTen, Sdt = @Sdt, Email = @Email, 
+                    Khoa = @Khoa, Nganh = @Nganh, ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, ThamNien = @ThamNien, 
                     DiaChiLienHe = @DiaChiLienHe, AnhDaiDien = @AnhDaiDien, NgayCapNhat = @NgayCapNhat
                     WHERE ZaloID = @ZaloID
                 `);
@@ -630,11 +657,11 @@ app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
             // Nếu ZaloID chưa tồn tại, thêm mới
             await request
                 .input('MaSV', sql.Int, MaSV)
-                .input('MaLop', sql.VarChar, MaLop)
                 .input('HoTen', sql.NVarChar, HoTen)
                 .input('Sdt', sql.NVarChar, Sdt)
                 .input('Email', sql.NVarChar, Email)
                 .input('Khoa', sql.NVarChar, Khoa)
+                .input('Nganh', sql.NVarChar, Nganh)
                 .input('ChucVu', sql.NVarChar, ChucVu)
                 .input('DonViCongTac', sql.NVarChar, DonViCongTac)
                 .input('ThamNien', sql.NVarChar, ThamNien)
@@ -642,8 +669,8 @@ app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
                 .input('AnhDaiDien', sql.NVarChar, AnhDaiDien)
                 .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
                 .query(`
-                    INSERT INTO ZaloAccount (MaSV, MaLop, HoTen, Sdt, Email, Khoa, ChucVu, DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien)
-                    VALUES (@MaSV, @Malop, @HoTen, @Sdt, @Email, @Khoa, @ChucVu, @DonViCongTac, @ThamNien, @DiaChiLienHe, @ZaloID, @AnhDaiDien, @NgayCapNhat)
+                    INSERT INTO ZaloAccount (MaSV, HoTen, Sdt, Email, Khoa, Nganh, ChucVu, DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien)
+                    VALUES (@MaSV, @HoTen, @Sdt, @Email, @Khoa, @Nganh, @ChucVu, @DonViCongTac, @ThamNien, @DiaChiLienHe, @ZaloID, @AnhDaiDien, @NgayCapNhat)
                 `);
 
             res.status(201).send('Thêm mới thông tin thành công');
@@ -807,6 +834,7 @@ app.get("/api/ChiTietBanTin", async (req, res) => {
     }
 });
 
+//danh sách việc làm
 app.get('/api/jobs', async (req, res) => {
     try {
         const url = 'https://dichvuvieclam.tvu.edu.vn/';
@@ -855,6 +883,7 @@ app.get('/api/jobs', async (req, res) => {
     }
 });
 
+//chi tiết việc làm
 app.get('/api/job-detail', async (req, res) => {
     try {
         const { url } = req.query;
