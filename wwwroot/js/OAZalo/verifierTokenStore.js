@@ -29,7 +29,20 @@ async function getToken() {
     const result = await pool.request()
       .query('SELECT * FROM Zalo_Token WHERE id = 1');
 
-    return result.recordset[0] || null;
+    const tokenData = result.recordset[0];
+
+    if (
+      tokenData &&
+      tokenData.access_token &&
+      tokenData.refresh_token &&
+      tokenData.access_token.trim() !== '' &&
+      tokenData.refresh_token.trim() !== ''
+    ) {
+      return tokenData;
+    } else {
+      console.warn('Token không hợp lệ hoặc thiếu access_token / refresh_token');
+      return null;
+    }
   } catch (err) {
     console.error('Lỗi khi lấy token từ DB:', err.message);
     return null;

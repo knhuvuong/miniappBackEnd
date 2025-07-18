@@ -27,6 +27,7 @@ async function refreshAccessToken(currentRefreshToken) {
     );
 
     const tokenData = response.data;
+    console.log('Token nhận được từ Zalo:', tokenData);
 
     saveToken(tokenData);
 
