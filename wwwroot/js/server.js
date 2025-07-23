@@ -386,30 +386,29 @@ app.get('/api/SinhViens/search', async (req, res) => {
 
 //danh sách csv 
 app.get('/api/SinhViens/list', async (req, res) => {
-    const { page = 1, pageSize = 5, nganhId } = req.query;
+    const { page = 1, pageSize = 5, maLop } = req.query;
 
     const pageNum = Number(page);
     const pageSizeNum = Number(pageSize);
-    const nganhIdNum = Number(nganhId);
 
     if (
         isNaN(pageNum) || isNaN(pageSizeNum) || pageNum <= 0 || pageSizeNum <= 0 ||
-        isNaN(nganhIdNum)
+        !maLop || typeof maLop !== 'string'
     ) {
-        return res.status(400).send('page, pageSize và nganhId phải là số nguyên dương.');
+        return res.status(400).send('page, pageSize phải là số và maLop là chuỗi hợp lệ.');
     }
 
     try {
         const pool = await getConnection();
         const request = pool.request();
 
-        request.input('nganhId', sql.Int, nganhIdNum);
+        request.input('maLop', sql.NVarChar, maLop);
 
         const totalCountQuery = `
-      SELECT COUNT(*) AS totalCount 
-      FROM ZaloAccount 
-      WHERE Nganh_ID = @nganhId
-    `;
+            SELECT COUNT(*) AS totalCount 
+            FROM ZaloAccount 
+            WHERE MaLopNhapHoc = @maLop
+        `;
         const totalCountResult = await request.query(totalCountQuery);
         const totalCount = totalCountResult.recordset[0].totalCount;
         const totalPages = Math.ceil(totalCount / pageSizeNum);
@@ -429,11 +428,12 @@ app.get('/api/SinhViens/list', async (req, res) => {
         request.input('pageSize', sql.Int, pageSizeNum);
 
         const dataQuery = `
-      SELECT * 
-      FROM ZaloAccount 
-      WHERE Nganh_ID = @nganhId
-      ORDER BY ID OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
-    `;
+            SELECT * 
+            FROM ZaloAccount 
+            WHERE MaLopNhapHoc = @maLop
+            ORDER BY ID 
+            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+        `;
 
         const result = await request.query(dataQuery);
 
@@ -1049,14 +1049,15 @@ app.get('/api/KhoaNganh', async (req, res) => {
         const request = pool.request();
         request.input('nganhId', sql.Int, nganhId);
         const query = `
-            SELECT 
-                MaLopNhapHoc,
-                TenLopNhapHoc,
-                NienKhoa,
-                Nganh_ID
+            SELECT DISTINCT lnh.NienKhoa
             FROM DT_LopNhapHoc lnh
             JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
-            WHERE Nganh_ID = @nganhId
+            WHERE ndt.MaNganh = (
+            SELECT MaNganh
+            FROM Nganh
+            WHERE ID = @nganhId
+            )
+            ORDER BY lnh.NienKhoa DESC
         `;
         const result = await request.query(query);
         if (result.recordset.length === 0) {
@@ -1078,7 +1079,7 @@ app.get('/api/LopNhapHoc', async (req, res) => {
         if (!khoa || !nganhId) {
             return res.status(400).send('Thiếu tham số khoa và nganhId');
         }
-        
+
         const pool = await getConnection();
         const request = pool.request();
         request.input('khoa', sql.NVarChar, khoa);
@@ -1087,14 +1088,20 @@ app.get('/api/LopNhapHoc', async (req, res) => {
         const query = `
             SELECT 
                 lnh.ID,
-                MaLopNhapHoc,
-                TenLopNhapHoc,
-                NienKhoa,
-                Nganh_ID
+                lnh.MaLopNhapHoc,
+                lnh.TenLopNhapHoc,
+                lnh.NienKhoa,
+                lnh.Nganh_ID
             FROM DT_LopNhapHoc lnh
             JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
-            WHERE Nganh_ID = @nganhId
-            AND NienKhoa = @khoa`;
+            WHERE ndt.MaNganh = (
+                SELECT MaNganh
+                FROM Nganh
+                WHERE ID = @nganhId
+            )
+            AND lnh.NienKhoa = @khoa
+            ORDER BY lnh.MaLopNhapHoc
+`;
 
         const result = await request.query(query);
 
@@ -1106,6 +1113,63 @@ app.get('/api/LopNhapHoc', async (req, res) => {
 
     } catch (err) {
         console.error('Lỗi khi lấy lớp nhập học:', err);
+        res.status(500).send('Internal Server Error');
+    }
+});
+
+//tìm kiếm theo phân cấp nhóm ngành - ngành - khóa - lớp
+app.get('/api/TimKiemSinhVien', async (req, res) => {
+    const { maLop, page = 1, pageSize = 10 } = req.query;
+    if (!maLop) {
+        return res.status(400).send('Thiếu tham số maLop');
+    }
+    if (isNaN(page) || isNaN(pageSize) || page <= 0 || pageSize <= 0) {
+        return res.status(400).send('Page và pageSize phải là số nguyên dương.');
+    }
+    try {
+        const pool = await getConnection();
+        const request = pool.request();
+
+        request.input('maLop', sql.NVarChar, maLop);
+
+        const countQuery = `
+            SELECT COUNT(*) AS totalCount 
+            FROM ZaloAccount 
+            WHERE MaLopNhapHoc = @maLop
+        `;
+        const countResult = await request.query(countQuery);
+        const totalCount = countResult.recordset[0].totalCount;
+
+        if (totalCount === 0) {
+            return res.status(404).send('Không tìm thấy sinh viên nào trong lớp này!');
+        }
+
+        const totalPages = Math.ceil(totalCount / pageSize);
+        const offset = (page - 1) * pageSize;
+
+        request.input('offset', sql.Int, offset);
+        request.input('pageSize', sql.Int, pageSize);
+
+        const dataQuery = `
+            SELECT * 
+            FROM ZaloAccount 
+            WHERE MaLopNhapHoc = @maLop
+            ORDER BY ID 
+            OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
+        `;
+
+        const result = await request.query(dataQuery);
+
+        res.json({
+            profiles: result.recordset,
+            totalCount,
+            page: parseInt(page),
+            pageSize: parseInt(pageSize),
+            totalPages
+        });
+
+    } catch (err) {
+        console.error('Lỗi truy vấn:', err);
         res.status(500).send('Internal Server Error');
     }
 });
