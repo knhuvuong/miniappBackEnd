@@ -175,10 +175,6 @@ app.post("/api/verifyOTP", async (req, res) => {
             .input('Mail', sql.NVarChar, mail)
             .query(`UPDATE Zalo_OTP SET TrangThai = 1 WHERE Mail = @Mail`);
 
-        await pool.request()
-            .input('Mail', sql.NVarChar, mail)
-            .query(`UPDATE ZaloAccount SET DaXacThuc = 1 WHERE Email = @Mail`);
-
         return res.status(200).send({ message: "Xác minh OTP thành công!" });
 
     } catch (error) {
@@ -187,51 +183,53 @@ app.post("/api/verifyOTP", async (req, res) => {
     }
 });
 
-// Tìm kiếm thông tin cựu sinh viên đăng nhập zalo theo ngành
+// Tìm kiếm thông tin cựu sinh viên đã đăng ký thông tin theo ngành (Tìm bạn cùng lớp)
 app.get('/api/SinhViens/Zalo/major/search', async (req, res) => {
-    const { keyword, page = 1, pageSize = 20, nganhId } = req.query;
+    const { keyword, page = 1, pageSize = 20, maLop } = req.query;
 
-    if (!nganhId || isNaN(nganhId)) {
-        return res.status(400).send('Thiếu hoặc sai định dạng nganhId');
+    if (!maLop) {
+        return res.status(400).send('Thiếu mã lớp');
     }
 
     try {
         const pool = await getConnection();
         const request = pool.request();
 
-        request.input('nganhId', sql.Int, nganhId);
+        request.input('maLop', sql.NVarChar, maLop);
 
         let query = `
-      SELECT ID, MaSV, HoTen, AnhDaiDien, Khoa 
-      FROM ZaloAccount 
-      WHERE Nganh_ID = @nganhId
-    `;
+            SELECT za.ID, zan.MaSV, za.HoTen, za.AnhDaiDien, zan.Nganh, zan.Khoa 
+            FROM ZaloAccount za 
+            JOIN ZaloAccount_Nganh zan ON za.ID = zan.ZaloAccount_ID
+            WHERE zan.MaLopNhapHoc = @maLop
+        `;
 
         if (keyword) {
             if (!isNaN(keyword)) {
-                query += ' AND (MaSV LIKE @keyword OR Khoa LIKE @keyword)';
+                query += ' AND (zan.MaSV LIKE @keyword OR zan.Khoa LIKE @keyword)';
             } else {
-                query += ' AND (HoTen LIKE @keyword)';
+                query += ' AND (za.HoTen LIKE @keyword)';
             }
             request.input('keyword', sql.NVarChar, `%${keyword}%`);
         }
 
         const offset = (page - 1) * pageSize;
-        query += ' ORDER BY MaSV OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY';
+        query += ' ORDER BY zan.MaSV OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY';
         request.input('offset', sql.Int, offset);
         request.input('pageSize', sql.Int, pageSize);
 
         // Đếm tổng số kết quả phù hợp
         let totalCountQuery = `
-      SELECT COUNT(*) AS totalCount 
-      FROM ZaloAccount 
-      WHERE Nganh_ID = @nganhId
-    `;
+            SELECT COUNT(*) AS totalCount 
+            FROM ZaloAccount za
+            JOIN ZaloAccount_Nganh zan ON za.ID = zan.ZaloAccount_ID
+            WHERE zan.MaLopNhapHoc = @maLop
+        `;
         if (keyword) {
             if (!isNaN(keyword)) {
-                totalCountQuery += ' AND (MaSV LIKE @keyword OR Khoa LIKE @keyword)';
+                totalCountQuery += ' AND (zan.MaSV LIKE @keyword OR zan.Khoa LIKE @keyword)';
             } else {
-                totalCountQuery += ' AND (HoTen LIKE @keyword)';
+                totalCountQuery += ' AND (za.HoTen LIKE @keyword)';
             }
         }
 
@@ -273,12 +271,14 @@ app.get('/api/SinhViens/search', async (req, res) => {
                 sv.ID,
                 sv.MSSV,
                 sv.FullName,
-                ndt.TenNganh,
-                lnh.NienKhoa,
                 sv.NgaySinh,
                 sv.HienDienSV,
+				lnh.NienKhoa,
                 n1.TenNhomNganh,
-                n2.ID AS Nganh_ID
+                n2.ID AS Nganh_ID,
+				ndt.TenNganh,
+				lnh.ID AS LopNhapHoc_ID,
+				lnh.MaLopNhapHoc
             FROM SinhVien sv
             JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
             JOIN DT_LopNhapHoc lnh ON lhsv.LopNhapHoc_ID = lnh.ID
@@ -379,12 +379,12 @@ app.get('/api/SinhViens/search', async (req, res) => {
         });
 
     } catch (err) {
-        console.error('Lỗi khi tìm sinh viên:', err);
+        console.error('Lỗi khi tìm sinh viên:', err.stack || err.message || err);
         res.status(500).json({ message: 'Internal Server Error', error: err.message });
     }
 });
 
-//danh sách csv 
+//danh sách csv theo lớp
 app.get('/api/SinhViens/list', async (req, res) => {
     const { page = 1, pageSize = 5, maLop } = req.query;
 
@@ -405,9 +405,10 @@ app.get('/api/SinhViens/list', async (req, res) => {
         request.input('maLop', sql.NVarChar, maLop);
 
         const totalCountQuery = `
-            SELECT COUNT(*) AS totalCount 
-            FROM ZaloAccount 
-            WHERE MaLopNhapHoc = @maLop
+            SELECT COUNT(*) AS totalCount
+            FROM ZaloAccount za
+            JOIN ZaloAccount_Nganh zan ON za.ID = zan.ZaloAccount_ID
+            WHERE zan.MaLopNhapHoc = @maLop
         `;
         const totalCountResult = await request.query(totalCountQuery);
         const totalCount = totalCountResult.recordset[0].totalCount;
@@ -428,10 +429,13 @@ app.get('/api/SinhViens/list', async (req, res) => {
         request.input('pageSize', sql.Int, pageSizeNum);
 
         const dataQuery = `
-            SELECT * 
-            FROM ZaloAccount 
-            WHERE MaLopNhapHoc = @maLop
-            ORDER BY ID 
+            SELECT 
+                za.ID, za.HoTen, za.AnhDaiDien, za.ZaloID,
+                zan.MaSV, zan.Nganh, zan.Khoa, zan.MaLopNhapHoc
+            FROM ZaloAccount za
+            JOIN ZaloAccount_Nganh zan ON za.ID = zan.ZaloAccount_ID
+            WHERE zan.MaLopNhapHoc = @maLop
+            ORDER BY za.ID
             OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
         `;
 
@@ -462,18 +466,36 @@ app.get('/api/SinhViens/info', async (req, res) => {
     let pool;
 
     try {
-        const pool = await getConnection();
+        pool = await getConnection();
 
-        const query = 'SELECT * FROM ZaloAccount WHERE ZaloID = @ZaloID';
-        const result = await pool.request()
+        const userQuery = `
+            SELECT * FROM ZaloAccount WHERE ZaloID = @ZaloID
+        `;
+        const userResult = await pool.request()
             .input('ZaloID', sql.VarChar, ZaloID)
-            .query(query);
+            .query(userQuery);
 
-        if (result.recordset.length === 0) {
+        if (userResult.recordset.length === 0) {
             return res.status(404).json({ error: 'Chưa có thông tin tài khoản!' });
         }
 
-        res.json({ profile: result.recordset[0] });
+        const user = userResult.recordset[0];
+
+        // Lấy danh sách ngành học
+        const majorQuery = `
+            SELECT MaSV, Khoa, Nganh_ID, Nganh, MaLopNhapHoc, LopNhapHoc_ID
+            FROM ZaloAccount_Nganh
+            WHERE ZaloAccount_ID = @UserID
+        `;
+        const majorResult = await pool.request()
+            .input('UserID', sql.Int, user.ID)
+            .query(majorQuery);
+
+        res.json({
+            profile: user,
+            majors: majorResult.recordset
+        });
+
     } catch (err) {
         console.error('SQL Server Error:', err.message);
         res.status(500).json({ error: 'Internal Server Error', details: err.message });
@@ -482,7 +504,7 @@ app.get('/api/SinhViens/info', async (req, res) => {
     }
 });
 
-//kiểm tra user tồn tại
+//kiểm tra user tồn tại trong ZaloAccount
 app.get('/api/SinhViens/checkUserExist', async (req, res) => {
     const { ZaloID } = req.query;
 
@@ -513,17 +535,53 @@ app.get('/api/SinhViens/checkUserExist', async (req, res) => {
     }
 });
 
-//tạo thông tin mới
+//tạo hoặc cập nhật thông tin user vào ZaloAccount và ZaloAccount_Nganh
+async function addMajorToZaloAccount(pool, zaloAccId, MaSV, Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa) {
+    // Validate required fields
+    if (!zaloAccId || !MaSV || !Nganh_ID || !Nganh || !MaLopNhapHoc || !Khoa) {
+        throw new Error('Thiếu thông tin bắt buộc để thêm ngành');
+    }
+
+    // Check if the major already exists for this user
+    const checkEnrollment = await pool.request()
+        .input('ZaloAccount_ID', sql.Int, zaloAccId)
+        .input('Nganh_ID', sql.Int, Nganh_ID)
+        .query(`
+            SELECT ID FROM ZaloAccount_Nganh
+            WHERE ZaloAccount_ID = @ZaloAccount_ID AND Nganh_ID = @Nganh_ID
+        `);
+
+    if (checkEnrollment.recordset.length === 0) {
+        // Add new major
+        await pool.request()
+            .input('ZaloAccount_ID', sql.Int, zaloAccId)
+            .input('MaSV', sql.VarChar, MaSV)
+            .input('Nganh_ID', sql.Int, Nganh_ID)
+            .input('Nganh', sql.NVarChar, Nganh)
+            .input('LopNhapHoc_ID', sql.Int, LopNhapHoc_ID || null)
+            .input('MaLopNhapHoc', sql.NVarChar, MaLopNhapHoc)
+            .input('Khoa', sql.VarChar, Khoa)
+            .query(`
+                INSERT INTO ZaloAccount_Nganh (
+                    ZaloAccount_ID, MaSV, Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa
+                )
+                VALUES (
+                    @ZaloAccount_ID, @MaSV, @Nganh_ID, @Nganh, @LopNhapHoc_ID, @MaLopNhapHoc, @Khoa
+                )
+            `);
+        return true;
+    }
+    return false;
+}
 app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
     const {
-        SVTN_ID, MaSV, HoTen, Sdt, Email, Khoa, Nganh_ID, Nganh, ChucVu,
-        DonViCongTac, ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien
+        SVTN_ID, MaSV, HoTen, NgaySinh, Sdt, Email, Khoa,
+        Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc,
+        ChucVu, DonViCongTac, ThamNien, DiaChiLienHe,
+        ZaloID, AnhDaiDien
     } = req.body;
 
-    const tokenData = await getToken();
-    const accessToken = tokenData.access_token
-
-    if (!SVTN_ID || !MaSV || !HoTen || !Sdt || !Email || !Khoa || !Nganh_ID || !Nganh || !ZaloID || !AnhDaiDien) {
+    if (!SVTN_ID || !MaSV || !HoTen || !NgaySinh || !Sdt || !Email || !Khoa || !Nganh_ID || !Nganh || !ZaloID || !AnhDaiDien || !MaLopNhapHoc) {
         return res.status(400).send('Thiếu thông tin bắt buộc');
     }
 
@@ -531,84 +589,77 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
     const NgayCapNhat = new Date();
 
     let pool;
-    try {
-        const pool = await getConnection();
 
-        const checkRequest = pool.request();
-        checkRequest.input('ZaloID', sql.NVarChar, ZaloID);
-        const checkZaloID = await checkRequest.query(`
-            SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID
-        `);
+    try {
+        pool = await getConnection();
+
+        // 1. Check if ZaloID exists
+        const checkZalo = await pool.request()
+            .input('ZaloID', sql.VarChar, ZaloID)
+            .query('SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID');
 
         let zaloAccId;
 
-        if (checkZaloID.recordset.length > 0) {
-            // Đã tồn tại - UPDATE
-            const updateRequest = pool.request();
-            updateRequest.input('ZaloID', sql.NVarChar, ZaloID)
-                .input('MaSV', sql.VarChar, MaSV)
+        if (checkZalo.recordset.length > 0) {
+            // Update existing ZaloAccount
+            zaloAccId = checkZalo.recordset[0].ID;
+
+            await pool.request()
+                .input('ZaloID', sql.VarChar, ZaloID)
                 .input('HoTen', sql.NVarChar, HoTen)
-                .input('Sdt', sql.NVarChar, Sdt)
-                .input('Email', sql.NVarChar, Email)
-                .input('Khoa', sql.NVarChar, Khoa)
-                .input('Nganh_ID', sql.Int, Nganh_ID)
-                .input('Nganh', sql.NVarChar, Nganh)
-                .input('ChucVu', sql.NVarChar, ChucVu)
-                .input('DonViCongTac', sql.NVarChar, DonViCongTac)
-                .input('ThamNien', sql.NVarChar, ThamNien)
-                .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe)
+                .input('NgaySinh', sql.DateTime, NgaySinh)
+                .input('Sdt', sql.VarChar, Sdt)
+                .input('Email', sql.VarChar, Email)
+                .input('ChucVu', sql.NVarChar, ChucVu || null)
+                .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
+                .input('ThamNien', sql.VarChar, ThamNien || null)
+                .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
                 .input('AnhDaiDien', sql.NVarChar, AnhDaiDien)
-                .input('NgayTao', sql.DateTime, NgayTao)
-                .input('NgayCapNhat', sql.DateTime, NgayCapNhat);
-
-            await updateRequest.query(`
-                UPDATE ZaloAccount
-                SET MaSV = @MaSV, HoTen = @HoTen, Sdt = @Sdt, Email = @Email, 
-                    Khoa = @Khoa, Nganh_ID = @Nganh_ID, Nganh = @Nganh, ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, ThamNien = @ThamNien, 
-                    DiaChiLienHe = @DiaChiLienHe, AnhDaiDien = @AnhDaiDien, NgayTao = @NgayTao, 
-                    NgayCapNhat = @NgayCapNhat, DaXacThuc = 1
-                WHERE ZaloID = @ZaloID
-            `);
-
-            zaloAccId = checkZaloID.recordset[0].ID;
-
+                .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
+                .query(`
+                    UPDATE ZaloAccount SET 
+                        HoTen = @HoTen, NgaySinh = @NgaySinh, Sdt = @Sdt, Email = @Email,
+                        ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, 
+                        ThamNien = @ThamNien, DiaChiLienHe = @DiaChiLienHe, 
+                        AnhDaiDien = @AnhDaiDien, NgayCapNhat = @NgayCapNhat
+                    WHERE ZaloID = @ZaloID
+                `);
         } else {
-            // Chưa tồn tại - INSERT mới
-            const insertRequest = pool.request();
-            insertRequest
+            // Insert new ZaloAccount
+            const insertResult = await pool.request()
                 .input('SVTN_ID', sql.Int, SVTN_ID)
-                .input('MaSV', sql.VarChar, MaSV)
                 .input('HoTen', sql.NVarChar, HoTen)
-                .input('Sdt', sql.NVarChar, Sdt)
-                .input('Email', sql.NVarChar, Email)
-                .input('Khoa', sql.NVarChar, Khoa)
-                .input('Nganh_ID', sql.Int, Nganh_ID)
-                .input('Nganh', sql.NVarChar, Nganh)
-                .input('ChucVu', sql.NVarChar, ChucVu)
-                .input('DonViCongTac', sql.NVarChar, DonViCongTac)
-                .input('ThamNien', sql.NVarChar, ThamNien)
-                .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe)
-                .input('ZaloID', sql.NVarChar, ZaloID)
+                .input('NgaySinh', sql.DateTime, NgaySinh)
+                .input('Sdt', sql.VarChar, Sdt)
+                .input('Email', sql.VarChar, Email)
+                .input('ChucVu', sql.NVarChar, ChucVu || null)
+                .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
+                .input('ThamNien', sql.VarChar, ThamNien || null)
+                .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
                 .input('AnhDaiDien', sql.NVarChar, AnhDaiDien)
+                .input('ZaloID', sql.VarChar, ZaloID)
                 .input('NgayTao', sql.DateTime, NgayTao)
-                .input('NgayCapNhat', sql.DateTime, NgayCapNhat);
-
-            const insertResult = await insertRequest.query(`
-                INSERT INTO ZaloAccount (
-                    SVTN_ID, MaSV, HoTen, Sdt, Email, Khoa, Nganh_ID, Nganh, ChucVu, DonViCongTac, 
-                    ThamNien, DiaChiLienHe, ZaloID, AnhDaiDien, NgayTao, NgayCapNhat, DaXacThuc
-                )
-                OUTPUT INSERTED.ID
-                VALUES (
-                    @SVTN_ID, @MaSV, @HoTen, @Sdt, @Email, @Khoa, @Nganh_ID, @Nganh, @ChucVu, @DonViCongTac, 
-                    @ThamNien, @DiaChiLienHe, @ZaloID, @AnhDaiDien, @NgayTao, @NgayCapNhat, 1
-                )
-            `);
+                .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
+                .query(`
+                    INSERT INTO ZaloAccount (
+                        SVTN_ID, HoTen, NgaySinh, Sdt, Email, ChucVu, DonViCongTac,
+                        ThamNien, DiaChiLienHe, AnhDaiDien, ZaloID,
+                        NgayTao, NgayCapNhat
+                    )
+                    OUTPUT INSERTED.ID
+                    VALUES (
+                        @SVTN_ID, @HoTen, @NgaySinh, @Sdt, @Email, @ChucVu, @DonViCongTac,
+                        @ThamNien, @DiaChiLienHe, @AnhDaiDien, @ZaloID,
+                        @NgayTao, @NgayCapNhat
+                    )
+                `);
 
             zaloAccId = insertResult.recordset[0]?.ID;
         }
 
-        //gửi ZNS
+        await addMajorToZaloAccount(pool, zaloAccId, MaSV, Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa);
+
+        // gửi ZNS
         // if (zaloAccId && Sdt) {
         //     const znsPayload = {
         //         phone: Sdt.startsWith('0') ? `84${Sdt.slice(1)}` : Sdt,
@@ -620,6 +671,9 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         //             email_sinh_vien: Email
         //         },
         //     };
+
+        //     const tokenData = await getToken();
+        //     const accessToken = tokenData.access_token
 
         //     try {
         //         const znsRes = await fetch("https://business.openapi.zalo.me/message/template", {
@@ -639,14 +693,163 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         //     }
         // }
 
-        res.status(200).send({
-            message: 'Thành công tạo mới user',
-            zaloAccId: zaloAccId || null
+        res.status(200).json({
+            message: 'Thành công tạo hoặc cập nhật user',
+            zaloAccId
         });
 
     } catch (err) {
         console.error("Lỗi xử lý:", err);
         res.status(500).send('Internal Server Error');
+    } finally {
+        pool && pool.close();
+    }
+});
+
+//lấy danh sách ngành học còn lại của 1 sinh viên thông qua ZaloAccount_ID
+app.get('/api/SinhViens/NganhConLai', async (req, res) => {
+    const { zaloAccId } = req.query;
+    if (!zaloAccId) return res.status(400).send('Thiếu zaloAccId');
+
+    let pool;
+    try {
+        pool = await getConnection();
+
+        const userResult = await pool.request()
+            .input('ZaloAccId', sql.Int, zaloAccId)
+            .query(`
+                SELECT HoTen, NgaySinh
+                FROM ZaloAccount
+                WHERE ID = @ZaloAccId
+            `);
+
+        const user = userResult.recordset[0];
+        if (!user) {
+            return res.status(404).send('Không tìm thấy ZaloAccount');
+        }
+
+        const { HoTen, NgaySinh } = user;
+
+        const result = await pool.request()
+            .input('HoTen', sql.NVarChar, HoTen)
+            .input('NgaySinh', sql.DateTime, NgaySinh)
+            .input('ZaloAccId', sql.Int, zaloAccId)
+            .query(`
+                SELECT DISTINCT
+                    sv.ID,
+                    sv.MSSV,
+                    sv.FullName,
+                    sv.NgaySinh,
+                    sv.HienDienSV,
+                    lnh.NienKhoa AS Khoa,
+                    n1.TenNhomNganh,
+                    n2.ID AS Nganh_ID,
+                    ndt.TenNganh AS Nganh,
+                    lnh.ID AS LopNhapHoc_ID,
+                    lnh.MaLopNhapHoc
+                FROM SinhVien sv
+                JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
+                JOIN DT_LopNhapHoc lnh ON lhsv.LopNhapHoc_ID = lnh.ID
+                JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
+                JOIN Nganh n2 ON ndt.MaNganh = n2.MaNganh
+                JOIN NhomNganh n1 ON n2.NhomNganh_ID = n1.ID
+                WHERE sv.HienDienSV = 3
+                    AND sv.FullName = @HoTen
+                    AND sv.NgaySinh = @NgaySinh
+                    AND n2.ID NOT IN (
+                        SELECT Nganh_ID FROM ZaloAccount_Nganh WHERE ZaloAccount_ID = @ZaloAccId
+                    )
+            `);
+
+        res.status(200).json({
+            success: true,
+            data: result.recordset,
+        });
+
+    } catch (err) {
+        console.error("Lỗi khi lấy danh sách ngành còn lại:", err);
+        res.status(500).send('Lỗi server');
+    } finally {
+        pool && pool.close();
+    }
+});
+
+//thêm ngành cho 1 sinh viên đã có zaloAccount
+app.post('/api/SinhViens/ThemNganh', async (req, res) => {
+    const {
+        ZaloAccount_ID, MaSV, Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa
+    } = req.body;
+
+    // Validate required fields
+    if (!ZaloAccount_ID || !MaSV || !Nganh_ID || !Nganh || !MaLopNhapHoc || !Khoa) {
+        return res.status(400).send('Thiếu thông tin bắt buộc');
+    }
+
+    let pool;
+
+    try {
+        pool = await getConnection();
+
+        const checkZaloAccount = await pool.request()
+            .input('ZaloAccount_ID', sql.Int, ZaloAccount_ID)
+            .query('SELECT ID FROM ZaloAccount WHERE ID = @ZaloAccount_ID');
+
+        if (checkZaloAccount.recordset.length === 0) {
+            return res.status(404).send('Không tìm thấy ZaloAccount với ID cung cấp');
+        }
+
+        const added = await addMajorToZaloAccount(pool, ZaloAccount_ID, MaSV, Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa);
+
+        if (added) {
+            res.status(200).json({
+                message: 'Thêm ngành thành công'
+            });
+        } else {
+            res.status(400).json({
+                message: 'Ngành này đã tồn tại cho ZaloAccount'
+            });
+        }
+
+    } catch (err) {
+        console.error("Lỗi xử lý:", err);
+        res.status(500).send('Internal Server Error');
+    } finally {
+        pool && pool.close();
+    }
+});
+
+//lấy danh sách ngành đã thêm theo ZaloAccount_ID
+app.get('/api/SinhViens/NganhDaThem', async (req, res) => {
+    const { zaloAccId } = req.query;
+
+    if (isNaN(zaloAccId)) {
+        return res.status(400).send('ZaloAccount_ID không hợp lệ');
+    }
+
+    let pool;
+
+    try {
+        pool = await getConnection();
+
+        const result = await pool.request()
+            .input('ZaloAccount_ID', sql.Int, zaloAccId)
+            .query(`
+                SELECT 
+                    zan.Nganh_ID,
+                    zan.Nganh,
+                    zan.MaSV,
+                    zan.LopNhapHoc_ID,
+                    zan.MaLopNhapHoc,
+                    zan.Khoa
+                FROM ZaloAccount_Nganh zan
+                WHERE zan.ZaloAccount_ID = @ZaloAccount_ID
+            `);
+
+        res.status(200).json(result.recordset);
+
+    } catch (err) {
+        console.error("Lỗi khi lấy ngành đã thêm:", err);
+        res.status(500).send("Lỗi máy chủ");
     } finally {
         pool && pool.close();
     }
@@ -731,18 +934,207 @@ app.post('/api/SinhViens/CapNhatThongTin', async (req, res) => {
     }
 });
 
-app.get('/api/BanTinMoiNhatCSV', async (req, res) => {
+//Cập nhật cá nhân - việc làm
+app.post('/api/SinhViens/CapNhatThongTinCaNhanVaViecLam', async (req, res) => {
+    const {
+        ZaloID, SVTN_ID, HoTen, Sdt, Email,
+        ChucVu, DonViCongTac, ThamNien, DiaChiLienHe, AnhDaiDien
+    } = req.body;
+
+    if (!ZaloID || !SVTN_ID || !HoTen || !Sdt || !Email || !AnhDaiDien) {
+        return res.status(400).send('Thiếu thông tin bắt buộc');
+    }
+
+    const NgayCapNhat = new Date();
+    let pool;
+
     try {
-        const pool = await getConnection();
-        const result = await pool.request().query('SELECT TOP 5 * FROM Zalo_BanTinCuuSV ORDER BY NgayTao DESC');
-        res.json(result.recordset);
+        pool = await getConnection();
+
+        const check = await pool.request()
+            .input('ZaloID', sql.VarChar, ZaloID)
+            .query('SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID');
+
+        if (check.recordset.length === 0) {
+            return res.status(404).send('Không tìm thấy tài khoản Zalo');
+        }
+
+        await pool.request()
+            .input('ZaloID', sql.VarChar, ZaloID)
+            .input('SVTN_ID', sql.Int, SVTN_ID)
+            .input('HoTen', sql.NVarChar, HoTen)
+            .input('Sdt', sql.VarChar, Sdt)
+            .input('Email', sql.VarChar, Email)
+            .input('ChucVu', sql.NVarChar, ChucVu || null)
+            .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
+            .input('ThamNien', sql.NVarChar, ThamNien || null)
+            .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
+            .input('AnhDaiDien', sql.NVarChar, AnhDaiDien)
+            .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
+            .query(`
+                UPDATE ZaloAccount
+                SET SVTN_ID = @SVTN_ID, HoTen = @HoTen,
+                    Sdt = @Sdt, Email = @Email,
+                    ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, ThamNien = @ThamNien,
+                    DiaChiLienHe = @DiaChiLienHe, AnhDaiDien = @AnhDaiDien,
+                    NgayCapNhat = @NgayCapNhat
+                WHERE ZaloID = @ZaloID
+            `);
+
+        res.status(200).send('Cập nhật thông tin cá nhân + việc làm thành công');
     } catch (err) {
-        console.error(err);
-        res.status(500).send('Internal Server Error');
+        console.error('Lỗi:', err);
+        res.status(500).send('Lỗi máy chủ');
+    } finally {
+        if (pool) await pool.close();
     }
 });
 
-//danh sách bản tin
+//cập nhật toàn bộ thông tin (với ngành khai báo được chọn lại)
+app.post('/api/SinhViens/CapNhatToanBoThongTin', async (req, res) => {
+    const {
+        ZaloID, SVTN_ID, MaSV, HoTen, NgaySinh, Sdt, Email,
+        ChucVu, DonViCongTac, ThamNien, DiaChiLienHe, AnhDaiDien,
+        Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa
+    } = req.body;
+
+    if (!ZaloID || !SVTN_ID || !MaSV || !HoTen || !NgaySinh || !Sdt || !Email || !AnhDaiDien || !Nganh_ID || !Nganh || !MaLopNhapHoc || !Khoa) {
+        return res.status(400).send('Thiếu thông tin bắt buộc');
+    }
+
+    const NgayCapNhat = new Date();
+    let pool;
+
+    try {
+        pool = await getConnection();
+
+        // 1. Kiểm tra tài khoản
+        const result = await pool.request()
+            .input('ZaloID', sql.VarChar, ZaloID)
+            .query('SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID');
+
+        if (result.recordset.length === 0) {
+            return res.status(404).send('Không tìm thấy tài khoản Zalo');
+        }
+
+        const zaloAccId = result.recordset[0].ID;
+
+        // 2. Cập nhật ZaloAccount
+        await pool.request()
+            .input('ZaloID', sql.VarChar, ZaloID)
+            .input('SVTN_ID', sql.Int, SVTN_ID)
+            .input('HoTen', sql.NVarChar, HoTen)
+            .input('NgaySinh', sql.DateTime, NgaySinh)
+            .input('Sdt', sql.VarChar, Sdt)
+            .input('Email', sql.VarChar, Email)
+            .input('ChucVu', sql.NVarChar, ChucVu || null)
+            .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
+            .input('ThamNien', sql.VarChar, ThamNien || null)
+            .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
+            .input('AnhDaiDien', sql.NVarChar, AnhDaiDien)
+            .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
+            .query(`
+                UPDATE ZaloAccount
+                SET SVTN_ID = @SVTN_ID, HoTen = @HoTen, NgaySinh = @NgaySinh,
+                    Sdt = @Sdt, Email = @Email,
+                    ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, ThamNien = @ThamNien,
+                    DiaChiLienHe = @DiaChiLienHe, AnhDaiDien = @AnhDaiDien,
+                    NgayCapNhat = @NgayCapNhat
+                WHERE ZaloID = @ZaloID
+            `);
+
+        // 3. Xóa toàn bộ ngành cũ
+        await pool.request()
+            .input('ZaloAccount_ID', sql.Int, zaloAccId)
+            .query(`DELETE FROM ZaloAccount_Nganh WHERE ZaloAccount_ID = @ZaloAccount_ID`);
+
+        // 4. Thêm lại ngành mới (gọi lại hàm bạn đã viết sẵn)
+        await addMajorToZaloAccount(pool, zaloAccId, MaSV, Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa);
+
+        res.status(200).json({
+            message: 'Cập nhật toàn bộ thông tin thành công',
+            zaloAccId: zaloAccId
+        });
+
+    } catch (err) {
+        console.error('Lỗi:', err);
+        res.status(500).send('Lỗi máy chủ');
+    } finally {
+        if (pool) await pool.close();
+    }
+});
+
+// //bản tin csv tms
+// app.get('/api/BanTinMoiNhatCSV', async (req, res) => {
+//     try {
+//         const pool = await getConnection();
+//         const result = await pool.request().query('SELECT TOP 5 * FROM Zalo_BanTinCuuSV ORDER BY NgayTao DESC');
+//         res.json(result.recordset);
+//     } catch (err) {
+//         console.error(err);
+//         res.status(500).send('Internal Server Error');
+//     }
+// });
+
+//5 bản tin csv wordpress
+app.get("/api/BanTinMoiNhatCSV", async (req, res) => {
+    const url = "https://alumni.tvu.edu.vn/wp-json/wp/v2/posts?per_page=5&orderby=date&order=desc";
+
+    try {
+        const response = await axios.get(url);
+        res.json(response.data);
+    } catch (error) {
+        console.error("Lỗi lấy bản tin:", error.message);
+        res.status(500).send("Internal Server Error: " + error.message);
+    }
+});
+
+//tất cả bản tin csv wordpress
+app.get("/api/TatCaBanTinWP", async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const per_page = parseInt(req.query.limit) || 5;
+
+    const url = `https://alumni.tvu.edu.vn/wp-json/wp/v2/posts?orderby=date&order=desc&page=${page}&per_page=${per_page}`;
+
+    try {
+        const response = await axios.get(url);
+        const total = response.headers["x-wp-total"];
+        const totalPages = response.headers["x-wp-totalpages"];
+
+        res.json({
+            articles: response.data,
+            page,
+            per_page,
+            total: Number(total),
+            totalPages: Number(totalPages),
+        });
+    } catch (error) {
+        console.error("Lỗi lấy bản tin:", error.message);
+        const statusCode = error.response?.status || 500;
+        res.status(statusCode).send("Lỗi khi lấy bản tin: " + error.message);
+    }
+});
+
+//lấy chi tiết bài viết từ WordPress
+app.get("/api/ChiTietBanTinWP", async (req, res) => {
+    const { id } = req.query;
+
+    if (!id) {
+        return res.status(400).send("Thiếu tham số 'id' bài viết");
+    }
+
+    const url = `https://alumni.tvu.edu.vn/wp-json/wp/v2/posts/${id}`;
+
+    try {
+        const response = await axios.get(url);
+        res.send(response.data);
+    } catch (error) {
+        console.error("Lỗi khi lấy chi tiết bản tin:", error.message);
+        res.status(500).send("Internal Server Error: " + error.message);
+    }
+});
+
+//danh sách bản tin db
 app.get('/api/TatCaBanTin', async (req, res) => {
     const { page = 1, pageSize = 10 } = req.query;
 
@@ -788,7 +1180,7 @@ app.get('/api/TatCaBanTin', async (req, res) => {
     }
 });
 
-//chi tiết bản tin
+//chi tiết bản tin db
 app.get('/api/ChiTietBanTin', async (req, res) => {
     const { id } = req.query;
 
@@ -814,47 +1206,51 @@ app.get('/api/ChiTietBanTin', async (req, res) => {
     }
 });
 
-//góp ý 
+// Góp ý từ sinh viên
 app.post('/api/GopY', async (req, res) => {
-    const { ZaloId, TieuDe, NoiDung } = req.body;
+    const { ZaloID, TieuDe, NoiDung } = req.body;
 
-    if (!ZaloId || !TieuDe || !NoiDung) {
-        return res.status(400).send('Thiếu thông tin bắt buộc');
+    // Kiểm tra đầu vào
+    if (!ZaloID || !TieuDe || !NoiDung) {
+        return res.status(400).json({ error: 'Thiếu thông tin bắt buộc' });
     }
 
+    let pool;
+
     try {
-        const pool = await getConnection();
+        pool = await getConnection();
 
-        const checkZaloIdResult = await pool.request()
-            .input('ZaloId', sql.VarChar, ZaloId)
-            .query('SELECT ID FROM ZaloAccount WHERE ZaloId = @ZaloId');
+        // Kiểm tra ZaloID có tồn tại trong ZaloAccount
+        const checkZaloID = await pool.request()
+            .input('ZaloID', sql.VarChar, ZaloID)
+            .query('SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID');
 
-        if (checkZaloIdResult.recordset.length === 0) {
-            return res.status(400).send('ZaloId không tồn tại');
+        if (checkZaloID.recordset.length === 0) {
+            return res.status(404).json({ error: 'ZaloID không tồn tại trong hệ thống' });
         }
 
-        const result = await pool.request().query(`
-            SELECT @@SERVERNAME AS ServerName, DB_NAME() AS   DatabaseName
-        `);
+        const ZaloAcc_ID = checkZaloID.recordset[0].ID;
 
-        console.log('Server đang kết nối:', result.recordset[0]);
-
-        const ZaloAcc_ID = checkZaloIdResult.recordset[0].ID;
-
+        // Ghi góp ý
         await pool.request()
-            .input('ZaloAcc_ID', sql.Int, ZaloAcc_ID)
+            .input('ZaloAccount_ID', sql.Int, ZaloAcc_ID)
             .input('TieuDe', sql.NVarChar, TieuDe)
             .input('NoiDung', sql.NVarChar, NoiDung)
             .query(`
-                INSERT INTO Zalo_ThongTinTuCuuSV (ZaloAcc_ID, TieuDe, NoiDung, NgayTao)
-                VALUES (@ZaloAcc_ID, @TieuDe, @NoiDung, GETDATE())
+                INSERT INTO Zalo_ThongTinTuCuuSV (
+                    ZaloAccount_ID, TieuDe, NoiDung, NgayTao
+                ) VALUES (
+                    @ZaloAccount_ID, @TieuDe, @NoiDung, GETDATE()
+                )
             `);
-        res.status(200).send('Góp ý đã được ghi nhận');
+
+        res.status(200).json({ message: 'Góp ý đã được ghi nhận' });
+
     } catch (err) {
-        console.error('Lỗi chi tiết:', err);
-        res.status(500).send('Internal Server Error');
+        console.error('Lỗi khi xử lý góp ý:', err);
+        res.status(500).json({ error: 'Lỗi máy chủ', details: err.message });
     } finally {
-        await sql.close();
+        if (pool) await pool.close();
     }
 });
 
@@ -975,24 +1371,26 @@ app.get('/api/job-detail', async (req, res) => {
 app.get('/api/NhomNganh', async (req, res) => {
     try {
         const pool = await getConnection();
-        const request = pool.request();
 
-        const query = 'SELECT ID, TenNhomNganh FROM NhomNganh';
-        const result = await request.query(query);
+        const result = await pool.request().query(`
+        SELECT 
+            nn.ID, 
+            nn.TenNhomNganh,
+            COUNT(n.ID) AS SoLuongNganh
+        FROM NhomNganh nn
+        LEFT JOIN Nganh n ON n.NhomNganh_ID = nn.ID
+        GROUP BY nn.ID, nn.TenNhomNganh
+        ORDER BY nn.ID 
+        `);
 
         if (result.recordset.length === 0) {
             return res.status(404).send('Không tìm thấy nhóm ngành nào!');
         }
 
-        const countQuery = 'SELECT COUNT(*) AS totalCount FROM NhomNganh';
-        const countResult = await request.query(countQuery);
-        const totalCount = countResult.recordset[0].totalCount;
-
         res.json({
             data: result.recordset,
-            totalCount
+            totalCount: result.recordset.length,
         });
-
     } catch (err) {
         console.error('Lỗi khi lấy nhóm ngành:', err);
         res.status(500).send('Internal Server Error');
@@ -1010,30 +1408,28 @@ app.get('/api/NganhNhomNganh', async (req, res) => {
 
         const pool = await getConnection();
         const request = pool.request();
-
         request.input('nhomNganhId', sql.Int, nhomNganhId);
 
-        const query = `
-            SELECT 
-                Nganh.ID,
-                Nganh.TenNganh,
-                Nganh.NhomNganh_ID,
-                nn.TenNhomNganh
-            FROM Nganh
-            JOIN NhomNganh nn ON Nganh.NhomNganh_ID = nn.ID
-            WHERE nn.ID = @nhomNganhId
-        `;
-
-        const result = await request.query(query);
+        const result = await request.query(`
+      SELECT 
+          n.ID,
+          n.TenNganh,
+          n.NhomNganh_ID,
+          COUNT(DISTINCT lnh.NienKhoa) AS SoLuongKhoa
+      FROM Nganh n
+      LEFT JOIN DT_NganhDaoTao ndt ON ndt.MaNganh = n.MaNganh
+      LEFT JOIN DT_LopNhapHoc lnh ON lnh.Nganh_ID = ndt.ID
+      WHERE n.NhomNganh_ID = @nhomNganhId
+      GROUP BY n.ID, n.TenNganh, n.NhomNganh_ID
+    `);
 
         if (result.recordset.length === 0) {
             return res.status(404).send('Không tìm thấy ngành nào trong nhóm ngành này!');
         }
 
         res.json(result.recordset);
-
     } catch (err) {
-        console.error(err);
+        console.error('Lỗi khi lấy ngành theo nhóm ngành:', err);
         res.status(500).send('Internal Server Error');
     }
 });
@@ -1042,27 +1438,32 @@ app.get('/api/NganhNhomNganh', async (req, res) => {
 app.get('/api/KhoaNganh', async (req, res) => {
     try {
         const { nganhId } = req.query;
+
         if (!nganhId) {
             return res.status(400).send('Thiếu tham số nganhId');
         }
+
         const pool = await getConnection();
         const request = pool.request();
         request.input('nganhId', sql.Int, nganhId);
-        const query = `
-            SELECT DISTINCT lnh.NienKhoa
-            FROM DT_LopNhapHoc lnh
-            JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
-            WHERE ndt.MaNganh = (
-            SELECT MaNganh
-            FROM Nganh
-            WHERE ID = @nganhId
-            )
-            ORDER BY lnh.NienKhoa DESC
-        `;
-        const result = await request.query(query);
+
+        const result = await request.query(`
+      SELECT 
+          lnh.NienKhoa,
+          COUNT(lnh.ID) AS SoLuongLop
+      FROM DT_LopNhapHoc lnh
+      JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
+      WHERE ndt.MaNganh = (
+        SELECT MaNganh FROM Nganh WHERE ID = @nganhId
+      )
+      GROUP BY lnh.NienKhoa
+      ORDER BY lnh.NienKhoa DESC
+    `);
+
         if (result.recordset.length === 0) {
             return res.status(404).send('Không tìm thấy khóa nào cho ngành này!');
         }
+
         res.json(result.recordset);
     } catch (err) {
         console.error('Lỗi khi lấy khóa ngành:', err);
@@ -1073,7 +1474,6 @@ app.get('/api/KhoaNganh', async (req, res) => {
 //lớp theo khóa ngành
 app.get('/api/LopNhapHoc', async (req, res) => {
     try {
-
         const { khoa, nganhId } = req.query;
 
         if (!khoa || !nganhId) {
@@ -1085,92 +1485,101 @@ app.get('/api/LopNhapHoc', async (req, res) => {
         request.input('khoa', sql.NVarChar, khoa);
         request.input('nganhId', sql.Int, nganhId);
 
-        const query = `
+        const result = await request.query(`
             SELECT 
                 lnh.ID,
                 lnh.MaLopNhapHoc,
                 lnh.TenLopNhapHoc,
                 lnh.NienKhoa,
-                lnh.Nganh_ID
+                lnh.Nganh_ID,
+                (
+                    SELECT COUNT(*) 
+                    FROM ZaloAccount_Nganh zan
+                    WHERE zan.MaLopNhapHoc = lnh.MaLopNhapHoc
+                ) AS SoLuongSinhVien
             FROM DT_LopNhapHoc lnh
             JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
             WHERE ndt.MaNganh = (
-                SELECT MaNganh
-                FROM Nganh
-                WHERE ID = @nganhId
+                SELECT MaNganh FROM Nganh WHERE ID = @nganhId
             )
             AND lnh.NienKhoa = @khoa
             ORDER BY lnh.MaLopNhapHoc
-`;
-
-        const result = await request.query(query);
+                `);
 
         if (result.recordset.length === 0) {
             return res.status(404).send('Không tìm thấy lớp nào cho khóa này!');
         }
 
         res.json(result.recordset);
-
     } catch (err) {
         console.error('Lỗi khi lấy lớp nhập học:', err);
         res.status(500).send('Internal Server Error');
     }
 });
 
-//tìm kiếm theo phân cấp nhóm ngành - ngành - khóa - lớp
+//tìm kiếm sinh viên theo mã lớp nhập học (dữ liệu ở bảng ZaloAccount_Nganh)
 app.get('/api/TimKiemSinhVien', async (req, res) => {
     const { maLop, page = 1, pageSize = 10 } = req.query;
-    if (!maLop) {
-        return res.status(400).send('Thiếu tham số maLop');
-    }
-    if (isNaN(page) || isNaN(pageSize) || page <= 0 || pageSize <= 0) {
-        return res.status(400).send('Page và pageSize phải là số nguyên dương.');
-    }
-    try {
-        const pool = await getConnection();
-        const request = pool.request();
 
+    if (!maLop) {
+        return res.status(400).json({ error: 'Thiếu tham số maLop' });
+    }
+
+    const pageNum = parseInt(page);
+    const sizeNum = parseInt(pageSize);
+
+    if (isNaN(pageNum) || isNaN(sizeNum) || pageNum <= 0 || sizeNum <= 0) {
+        return res.status(400).json({ error: 'Page và pageSize phải là số nguyên dương.' });
+    }
+
+    let pool;
+
+    try {
+        pool = await getConnection();
+        const request = pool.request();
         request.input('maLop', sql.NVarChar, maLop);
 
+        // Đếm tổng số sinh viên thuộc lớp này
         const countQuery = `
-            SELECT COUNT(*) AS totalCount 
-            FROM ZaloAccount 
-            WHERE MaLopNhapHoc = @maLop
+            SELECT COUNT(*) AS totalCount
+            FROM ZaloAccount_Nganh zan
+            WHERE zan.MaLopNhapHoc = @maLop
         `;
         const countResult = await request.query(countQuery);
         const totalCount = countResult.recordset[0].totalCount;
 
         if (totalCount === 0) {
-            return res.status(404).send('Không tìm thấy sinh viên nào trong lớp này!');
+            return res.status(404).json({ error: 'Không tìm thấy sinh viên nào trong lớp này!' });
         }
 
-        const totalPages = Math.ceil(totalCount / pageSize);
-        const offset = (page - 1) * pageSize;
-
+        const offset = (pageNum - 1) * sizeNum;
         request.input('offset', sql.Int, offset);
-        request.input('pageSize', sql.Int, pageSize);
+        request.input('pageSize', sql.Int, sizeNum);
 
+        // Lấy thông tin sinh viên (kết hợp với bảng ZaloAccount)
         const dataQuery = `
-            SELECT * 
-            FROM ZaloAccount 
-            WHERE MaLopNhapHoc = @maLop
-            ORDER BY ID 
+            SELECT za.ID, zan.MaSV, za.HoTen, za.AnhDaiDien, zan.Nganh, zan.Khoa, zan.MaLopNhapHoc
+            FROM ZaloAccount za
+            JOIN ZaloAccount_Nganh zan ON za.ID = zan.ZaloAccount_ID
+            WHERE zan.MaLopNhapHoc = @maLop
+            ORDER BY zan.MaSV
             OFFSET @offset ROWS FETCH NEXT @pageSize ROWS ONLY
         `;
-
         const result = await request.query(dataQuery);
 
         res.json({
             profiles: result.recordset,
             totalCount,
-            page: parseInt(page),
-            pageSize: parseInt(pageSize),
-            totalPages
+            page: pageNum,
+            pageSize: sizeNum,
+            totalPages: Math.ceil(totalCount / sizeNum)
         });
 
     } catch (err) {
         console.error('Lỗi truy vấn:', err);
-        res.status(500).send('Internal Server Error');
+        res.status(500).json({ error: 'Lỗi máy chủ', details: err.message });
+    } finally {
+        if (pool) await pool.close();
     }
 });
 
