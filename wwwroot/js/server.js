@@ -1,4 +1,6 @@
 require('dotenv').config();
+const https = require('https');
+const fs = require('fs');
 const express = require('express');
 const bodyParser = require('body-parser');
 const sql = require('mssql');
@@ -12,6 +14,7 @@ const refreshAccessToken = require('../js/OAZalo/refreshToken');
 const { getToken, isTokenExpired } = require('../js/OAZalo/verifierTokenStore');
 const { getConnection } = require('./db');
 const cheerio = require('cheerio');
+const moment = require('moment-timezone');
 
 const app = express();
 
@@ -275,17 +278,16 @@ app.get('/api/SinhViens/search', async (req, res) => {
                 sv.HienDienSV,
 				lnh.NienKhoa,
                 n1.TenNhomNganh,
-                n2.ID AS Nganh_ID,
+                ndt.ID AS Nganh_ID,
 				ndt.TenNganh,
 				lnh.ID AS LopNhapHoc_ID,
 				lnh.MaLopNhapHoc
             FROM SinhVien sv
-            JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
+            LEFT JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
             JOIN DT_LopNhapHoc lnh ON lhsv.LopNhapHoc_ID = lnh.ID
             JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
-            JOIN Nganh n2 ON ndt.MaNganh = n2.MaNganh  
-            JOIN NhomNganh n1 ON n2.NhomNganh_ID = n1.ID
-            WHERE sv.HienDienSV = 3
+            JOIN DT_NhomNganh n1 ON ndt.NhomNganh_ID = n1.ID
+            WHERE sv.HienDienSV = 3 
         `;
 
         let countQuery = `
@@ -585,15 +587,14 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         return res.status(400).send('Thiếu thông tin bắt buộc');
     }
 
-    const NgayTao = new Date();
-    const NgayCapNhat = new Date();
+    const NgayTao = moment().tz('Asia/Ho_Chi_Minh').toDate();
+    const NgayCapNhat = moment().tz('Asia/Ho_Chi_Minh').toDate();
 
     let pool;
 
     try {
         pool = await getConnection();
 
-        // 1. Check if ZaloID exists
         const checkZalo = await pool.request()
             .input('ZaloID', sql.VarChar, ZaloID)
             .query('SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID');
@@ -612,9 +613,9 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
                 .input('Email', sql.VarChar, Email)
                 .input('ChucVu', sql.NVarChar, ChucVu || null)
                 .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
-                .input('ThamNien', sql.VarChar, ThamNien || null)
+                .input('ThamNien', sql.NVarChar, ThamNien || null)
                 .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
-                .input('AnhDaiDien', sql.NVarChar, AnhDaiDien)
+                .input('AnhDaiDien', sql.VarChar, AnhDaiDien)
                 .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
                 .query(`
                     UPDATE ZaloAccount SET 
@@ -634,9 +635,9 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
                 .input('Email', sql.VarChar, Email)
                 .input('ChucVu', sql.NVarChar, ChucVu || null)
                 .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
-                .input('ThamNien', sql.VarChar, ThamNien || null)
+                .input('ThamNien', sql.NVarChar, ThamNien || null)
                 .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
-                .input('AnhDaiDien', sql.NVarChar, AnhDaiDien)
+                .input('AnhDaiDien', sql.VarChar, AnhDaiDien)
                 .input('ZaloID', sql.VarChar, ZaloID)
                 .input('NgayTao', sql.DateTime, NgayTao)
                 .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
@@ -660,38 +661,38 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         await addMajorToZaloAccount(pool, zaloAccId, MaSV, Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa);
 
         // gửi ZNS
-        // if (zaloAccId && Sdt) {
-        //     const znsPayload = {
-        //         phone: Sdt.startsWith('0') ? `84${Sdt.slice(1)}` : Sdt,
-        //         template_id: "426499",
-        //         template_data: {
-        //             ten_sinh_vien: HoTen,
-        //             ma_sinh_vien: MaSV,
-        //             sdt_sinh_vien: Sdt,
-        //             email_sinh_vien: Email
-        //         },
-        //     };
+        if (zaloAccId && Sdt) {
+            const znsPayload = {
+                phone: Sdt.startsWith('0') ? `84${Sdt.slice(1)}` : Sdt,
+                template_id: "426499",
+                template_data: {
+                    ten_sinh_vien: HoTen,
+                    ma_sinh_vien: MaSV,
+                    sdt_sinh_vien: Sdt,
+                    email_sinh_vien: Email
+                },
+            };
 
-        //     const tokenData = await getToken();
-        //     const accessToken = tokenData.access_token
+            const tokenData = await getToken();
+            const accessToken = tokenData.access_token
 
-        //     try {
-        //         const znsRes = await fetch("https://business.openapi.zalo.me/message/template", {
-        //             method: "POST",
-        //             headers: {
-        //                 "Content-Type": "application/json",
-        //                 "access_token": accessToken
-        //             },
-        //             body: JSON.stringify(znsPayload)
-        //         });
+            try {
+                const znsRes = await fetch("https://business.openapi.zalo.me/message/template", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                        "access_token": accessToken
+                    },
+                    body: JSON.stringify(znsPayload)
+                });
 
-        //         const znsData = await znsRes.json();
+                const znsData = await znsRes.json();
 
-        //         console.log("Kết quả gửi ZNS:", znsData);
-        //     } catch (znsErr) {
-        //         console.error("Gửi ZNS thất bại:", znsErr);
-        //     }
-        // }
+                console.log("Kết quả gửi ZNS:", znsData);
+            } catch (znsErr) {
+                console.error("Gửi ZNS thất bại:", znsErr);
+            }
+        }
 
         res.status(200).json({
             message: 'Thành công tạo hoặc cập nhật user',
@@ -1377,8 +1378,8 @@ app.get('/api/NhomNganh', async (req, res) => {
             nn.ID, 
             nn.TenNhomNganh,
             COUNT(n.ID) AS SoLuongNganh
-        FROM NhomNganh nn
-        LEFT JOIN Nganh n ON n.NhomNganh_ID = nn.ID
+        FROM DT_NhomNganh nn
+        LEFT JOIN DT_NganhDaoTao n ON n.NhomNganh_ID = nn.ID
         GROUP BY nn.ID, nn.TenNhomNganh
         ORDER BY nn.ID 
         `);
@@ -1416,7 +1417,7 @@ app.get('/api/NganhNhomNganh', async (req, res) => {
           n.TenNganh,
           n.NhomNganh_ID,
           COUNT(DISTINCT lnh.NienKhoa) AS SoLuongKhoa
-      FROM Nganh n
+      FROM DT_NganhDaoTao n
       LEFT JOIN DT_NganhDaoTao ndt ON ndt.MaNganh = n.MaNganh
       LEFT JOIN DT_LopNhapHoc lnh ON lnh.Nganh_ID = ndt.ID
       WHERE n.NhomNganh_ID = @nhomNganhId
@@ -1454,7 +1455,7 @@ app.get('/api/KhoaNganh', async (req, res) => {
       FROM DT_LopNhapHoc lnh
       JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
       WHERE ndt.MaNganh = (
-        SELECT MaNganh FROM Nganh WHERE ID = @nganhId
+        SELECT MaNganh FROM DT_NganhDaoTao WHERE ID = @nganhId
       )
       GROUP BY lnh.NienKhoa
       ORDER BY lnh.NienKhoa DESC
@@ -1500,7 +1501,7 @@ app.get('/api/LopNhapHoc', async (req, res) => {
             FROM DT_LopNhapHoc lnh
             JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
             WHERE ndt.MaNganh = (
-                SELECT MaNganh FROM Nganh WHERE ID = @nganhId
+                SELECT MaNganh FROM DT_NganhDaoTao WHERE ID = @nganhId
             )
             AND lnh.NienKhoa = @khoa
             ORDER BY lnh.MaLopNhapHoc
@@ -1589,7 +1590,6 @@ app.get('/api/TimKiemSinhVien', async (req, res) => {
 
 
 //số lượng theo khóa ngành địa chỉ
-
 
 //----------------------------------------Zalo------------------------------------//
 
