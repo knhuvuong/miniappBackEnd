@@ -10,6 +10,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@google-cloud/local-auth": "^3.0.1",
     "axios": "^1.9.0",
     "body-parser": "^1.20.3",
     "cheerio": "^1.0.0",
@@ -18,7 +19,9 @@
     "decode-uri-component": "^0.4.1",
     "dotenv": "^16.5.0",
     "express": "^4.21.2",
+    "googleapis": "^155.0.1",
     "https": "^1.0.0",
+    "moment-timezone": "^0.6.0",
     "mssql": "^11.0.1",
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
