@@ -130,3 +130,6 @@ dist
 .pnp.*
 .env
 .vercel
+wwwroot/credentials/credentials.json
+wwwroot/credentials/token.json
+
