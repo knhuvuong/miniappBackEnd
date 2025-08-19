@@ -1,6 +1,7 @@
 require('dotenv').config();
 const https = require('https');
 const fs = require('fs');
+const process = require('process');
 const express = require('express');
 const bodyParser = require('body-parser');
 const sql = require('mssql');
@@ -13,9 +14,10 @@ const { saveToken } = require('../js/OAZalo/verifierTokenStore')
 const refreshAccessToken = require('../js/OAZalo/refreshToken');
 const { getToken, isTokenExpired } = require('../js/OAZalo/verifierTokenStore');
 const { getConnection } = require('./db');
+const authorize = require('./gmailAPI/googleAuth');
+const { sendEmail } = require('./gmailAPI/gmailApi');
 const cheerio = require('cheerio');
 const moment = require('moment-timezone');
-
 const app = express();
 
 async function checkAndRefreshTokenOnStartup() {
@@ -79,15 +81,15 @@ cron.schedule('0 0 * * *', async () => {
     }
 });
 
-const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_SENDER,
-    port: parseInt(process.env.EMAIL_PORT, 10),
-    secure: false,
-    auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-    },
-});
+// const transporter = nodemailer.createTransport({
+//     host: process.env.SMTP_SENDER,
+//     port: parseInt(process.env.EMAIL_PORT, 10),
+//     secure: false,
+//     auth: {
+//         user: process.env.EMAIL_USER,
+//         pass: process.env.EMAIL_PASS,
+//     },
+// });
 
 const generateOTP = () => {
     return Math.floor(10000 + Math.random() * 90000).toString();
@@ -99,90 +101,139 @@ app.use(cors());
 
 app.use('/', zaloCallback);
 
+function encodeSubject(subject) {
+    return `=?UTF-8?B?${Buffer.from(subject).toString('base64')}?=`;
+}
+
 //gửi otp 
 app.post("/api/sendOTP", async (req, res) => {
-
     const { mail } = req.body;
-    console.log(mail)
-    const now = new Date();
-    const expiresAt = new Date(now.getTime() + 2 * 60 * 1000); //het han 2'
+    console.log(mail);
 
     if (!mail) {
-        return res.status(400).send({ message: "Email không hợp lệ!" });
+        return res.status(400).json({ message: "Email không hợp lệ!" });
     }
 
+    const nowVN = moment().tz('Asia/Ho_Chi_Minh');
+    const expiresAtVN = nowVN.clone().add(2, 'minutes');
     const otp = generateOTP();
-    const createAtUTC = new Date(now.getTime() + 7 * 60 * 60 * 1000);
-    const expiresAtUTC = new Date(expiresAt.getTime() + 7 * 60 * 60 * 1000);
-    const verify = 0
+    const createAt = nowVN.format('YYYY-MM-DD HH:mm:ss Z'); 
+    const expiresAt = expiresAtVN.format('YYYY-MM-DD HH:mm:ss Z'); 
+    const verify = 0;
+
+    // console.log("Giờ hiện tại: " + nowVN.format('YYYY-MM-DD HH:mm:ss Z'));
+    // console.log("Giờ tạo: " + createAt);
+    // console.log("Giờ hết hạn: " + expiresAtVN.format('YYYY-MM-DD HH:mm:ss Z'));
 
     try {
         const pool = await getConnection();
 
         const existingOTP = await pool.request()
             .input('Mail', sql.NVarChar, mail)
-            .query(`SELECT 1 FROM Zalo_OTP WHERE Mail = @Mail AND NgayHetHan > GETDATE()`);
+            .query(`SELECT 1 FROM Zalo_OTP WHERE Mail = @Mail AND NgayHetHan > SYSDATETIMEOFFSET()`);
 
         if (existingOTP.recordset.length > 0) {
-            return res.status(429).send({ message: "Vui lòng chờ trước khi yêu cầu OTP mới." });
+            return res.status(429).json({ message: "Vui lòng chờ trước khi yêu cầu OTP mới." });
         }
 
         await pool.request()
             .input('Mail', sql.NVarChar, mail)
             .input('OTP', sql.NVarChar, otp)
-            .input('NgayTao', sql.DateTime, createAtUTC)
-            .input('NgayHetHan', sql.DateTime, expiresAtUTC)
+            .input('NgayTao', sql.DateTimeOffset, createAt)
+            .input('NgayHetHan', sql.DateTimeOffset, expiresAt)
             .input('TrangThai', sql.Bit, verify)
-            .query(`INSERT INTO Zalo_OTP (Mail, OTP, NgayTao, NgayHetHan, TrangThai) VALUES (@Mail, @OTP, @NgayTao, @NgayHetHan, @TrangThai)`);
+            .query(`
+                INSERT INTO Zalo_OTP (Mail, OTP, NgayTao, NgayHetHan, TrangThai)
+                VALUES (@Mail, @OTP, @NgayTao, @NgayHetHan, @TrangThai)
+            `);
 
-        const mailOptions = {
-            from: process.env.EMAIL_SENDER,
-            to: mail,
-            subject: "Mã OTP xác thực thông tin cựu sinh viên",
-            text: `Mã OTP của bạn là: ${otp}. Vui lòng không chia sẻ mã này với bất kỳ ai!`,
-        };
+        // Gửi mail
+        const auth = await authorize();
+        const subject = 'Mã OTP xác thực thông tin cựu sinh viên';
+        const encodedSubject = encodeSubject(subject);
+        const formattedExpiresAt = expiresAtVN.format('HH:mm:ss');
+        console.log("Giờ hết hạn (giờ VN): " + formattedExpiresAt);
+        const message =
+            `TO: ${mail}\n` +
+            `Subject: ${encodedSubject}\n` +
+            `Content-Type: text/plain; charset="UTF-8"\n` +
+            `Content-Transfer-Encoding: 7bit\n\n` +
+            `Mã OTP của bạn là: ${otp}\n` +
+            `OTP có hiệu lực đến ${formattedExpiresAt} (giờ VN).\n` +
+            `Vui lòng không chia sẻ mã này với bất kỳ ai.`;
 
-        transporter.sendMail(mailOptions, (error, info) => {
-            if (error) {
-                console.log(error);
-                return res.status(500).send({ message: "Lỗi khi gửi OTP qua mail", error });
-            }
+        await sendEmail(auth, message);
 
-            console.log("OTP đã được gửi thành công: " + info.response);
-            return res.status(200).send({ message: "Thành công", info });
-        });
+        console.log(`OTP đã được gửi thành công tới ${mail}`);
+        return res.status(200).json({ message: "Mã OTP đã được gửi" });
 
     } catch (error) {
         console.error("Lỗi khi gửi OTP:", error);
-        return res.status(500).send({ message: "Internal Server Error", error });
+
+        const errMsg = error.message || "";
+
+        if (errMsg.includes("4.2.2")) {
+            return res.status(400).json({ message: "Hộp thư của bạn đã đầy, vui lòng giải phóng dung lượng trước khi nhận OTP." });
+        }
+        if (errMsg.includes("5.1.1")) {
+            return res.status(400).json({ message: "Địa chỉ email không tồn tại, vui lòng kiểm tra lại." });
+        }
+
+        return res.status(500).json({ message: "Lỗi khi gửi OTP qua email", error: errMsg });
     }
 });
 
 //xác nhận otp
 app.post("/api/verifyOTP", async (req, res) => {
-    const { mail, otp } = req.body;
+    let { mail, otp } = req.body;
+
+    // Normalize dữ liệu
+    if (!mail || !otp) {
+        return res.status(400).send({ message: "Thiếu email hoặc OTP!" });
+    }
+    mail = mail.trim().toLowerCase();
+    otp = otp.trim();
 
     try {
         const pool = await getConnection();
 
+        // Lấy OTP chưa dùng
         const result = await pool.request()
             .input('Mail', sql.NVarChar, mail)
             .input('OTP', sql.NVarChar, otp)
-            .query(`SELECT * FROM Zalo_OTP WHERE Mail = @Mail AND OTP = @OTP AND NgayHetHan > GETDATE() AND TrangThai = 0`);
+            .query(`
+                SELECT * 
+                FROM Zalo_OTP 
+                WHERE Mail = @Mail 
+                  AND OTP = @OTP 
+                  AND TrangThai = 0
+            `);
 
         if (result.recordset.length === 0) {
-            return res.status(400).send({ message: "OTP không hợp lệ, đã hết hạn hoặc đã được sử dụng!" });
+            return res.status(400).send({ message: "OTP không hợp lệ hoặc đã được sử dụng!" });
         }
 
+        const otpRecord = result.recordset[0];
+        const now = new Date();
+
+        // Kiểm tra hết hạn bằng Node (giờ local)
+        if (new Date(otpRecord.NgayHetHan) < now) {
+            return res.status(400).send({ message: "OTP đã hết hạn!" });
+        }
+
+        // Update trạng thái OTP này thành đã dùng
         await pool.request()
             .input('Mail', sql.NVarChar, mail)
-            .query(`UPDATE Zalo_OTP SET TrangThai = 1 WHERE Mail = @Mail`);
+            .input('OTP', sql.NVarChar, otp)
+            .query(`UPDATE Zalo_OTP SET TrangThai = 1 WHERE Mail = @Mail AND OTP = @OTP`);
+
+        console.log(`OTP xác minh thành công cho email: ${mail}`);
 
         return res.status(200).send({ message: "Xác minh OTP thành công!" });
 
     } catch (error) {
         console.error("Lỗi khi xác minh OTP:", error);
-        return res.status(500).send({ message: "Internal Server Error", error });
+        return res.status(500).send({ message: "Internal Server Error", error: error.message });
     }
 });
 
@@ -277,16 +328,14 @@ app.get('/api/SinhViens/search', async (req, res) => {
                 sv.NgaySinh,
                 sv.HienDienSV,
 				lnh.NienKhoa,
-                n1.TenNhomNganh,
                 ndt.ID AS Nganh_ID,
 				ndt.TenNganh,
 				lnh.ID AS LopNhapHoc_ID,
 				lnh.MaLopNhapHoc
             FROM SinhVien sv
-            LEFT JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
+            JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
             JOIN DT_LopNhapHoc lnh ON lhsv.LopNhapHoc_ID = lnh.ID
             JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
-            JOIN DT_NhomNganh n1 ON ndt.NhomNganh_ID = n1.ID
             WHERE sv.HienDienSV = 3 
         `;
 
@@ -296,8 +345,6 @@ app.get('/api/SinhViens/search', async (req, res) => {
             JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
             JOIN DT_LopNhapHoc lnh ON lhsv.LopNhapHoc_ID = lnh.ID
             JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
-            JOIN Nganh n2 ON ndt.MaNganh = n2.MaNganh  
-            JOIN NhomNganh n1 ON n2.NhomNganh_ID = n1.ID
             WHERE sv.HienDienSV = 3
         `;
 
@@ -587,76 +634,53 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         return res.status(400).send('Thiếu thông tin bắt buộc');
     }
 
-    const NgayTao = moment().tz('Asia/Ho_Chi_Minh').toDate();
-    const NgayCapNhat = moment().tz('Asia/Ho_Chi_Minh').toDate();
-
     let pool;
 
     try {
         pool = await getConnection();
 
+        // Kiểm tra tồn tại
         const checkZalo = await pool.request()
             .input('ZaloID', sql.VarChar, ZaloID)
             .query('SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID');
 
-        let zaloAccId;
-
         if (checkZalo.recordset.length > 0) {
-            // Update existing ZaloAccount
-            zaloAccId = checkZalo.recordset[0].ID;
-
-            await pool.request()
-                .input('ZaloID', sql.VarChar, ZaloID)
-                .input('HoTen', sql.NVarChar, HoTen)
-                .input('NgaySinh', sql.DateTime, NgaySinh)
-                .input('Sdt', sql.VarChar, Sdt)
-                .input('Email', sql.VarChar, Email)
-                .input('ChucVu', sql.NVarChar, ChucVu || null)
-                .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
-                .input('ThamNien', sql.NVarChar, ThamNien || null)
-                .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
-                .input('AnhDaiDien', sql.VarChar, AnhDaiDien)
-                .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
-                .query(`
-                    UPDATE ZaloAccount SET 
-                        HoTen = @HoTen, NgaySinh = @NgaySinh, Sdt = @Sdt, Email = @Email,
-                        ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, 
-                        ThamNien = @ThamNien, DiaChiLienHe = @DiaChiLienHe, 
-                        AnhDaiDien = @AnhDaiDien, NgayCapNhat = @NgayCapNhat
-                    WHERE ZaloID = @ZaloID
-                `);
-        } else {
-            // Insert new ZaloAccount
-            const insertResult = await pool.request()
-                .input('SVTN_ID', sql.Int, SVTN_ID)
-                .input('HoTen', sql.NVarChar, HoTen)
-                .input('NgaySinh', sql.DateTime, NgaySinh)
-                .input('Sdt', sql.VarChar, Sdt)
-                .input('Email', sql.VarChar, Email)
-                .input('ChucVu', sql.NVarChar, ChucVu || null)
-                .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
-                .input('ThamNien', sql.NVarChar, ThamNien || null)
-                .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
-                .input('AnhDaiDien', sql.VarChar, AnhDaiDien)
-                .input('ZaloID', sql.VarChar, ZaloID)
-                .input('NgayTao', sql.DateTime, NgayTao)
-                .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
-                .query(`
-                    INSERT INTO ZaloAccount (
-                        SVTN_ID, HoTen, NgaySinh, Sdt, Email, ChucVu, DonViCongTac,
-                        ThamNien, DiaChiLienHe, AnhDaiDien, ZaloID,
-                        NgayTao, NgayCapNhat
-                    )
-                    OUTPUT INSERTED.ID
-                    VALUES (
-                        @SVTN_ID, @HoTen, @NgaySinh, @Sdt, @Email, @ChucVu, @DonViCongTac,
-                        @ThamNien, @DiaChiLienHe, @AnhDaiDien, @ZaloID,
-                        @NgayTao, @NgayCapNhat
-                    )
-                `);
-
-            zaloAccId = insertResult.recordset[0]?.ID;
+            // Đã tồn tại, không update
+            return res.status(200).json({
+                message: 'ZaloAccount đã tồn tại, không tạo mới',
+                zaloAccId: checkZalo.recordset[0].ID
+            });
         }
+
+        // Tạo mới
+        const insertResult = await pool.request()
+            .input('SVTN_ID', sql.Int, SVTN_ID)
+            .input('HoTen', sql.NVarChar, HoTen)
+            .input('NgaySinh', sql.DateTime, NgaySinh)
+            .input('Sdt', sql.VarChar, Sdt)
+            .input('Email', sql.VarChar, Email)
+            .input('ChucVu', sql.NVarChar, ChucVu || null)
+            .input('DonViCongTac', sql.NVarChar, DonViCongTac || null)
+            .input('ThamNien', sql.NVarChar, ThamNien || null)
+            .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
+            .input('AnhDaiDien', sql.VarChar, AnhDaiDien)
+            .input('ZaloID', sql.VarChar, ZaloID)
+            .query(`
+                INSERT INTO ZaloAccount (
+                    SVTN_ID, HoTen, NgaySinh, Sdt, Email, ChucVu, DonViCongTac,
+                    ThamNien, DiaChiLienHe, AnhDaiDien, ZaloID,
+                    NgayTao, NgayCapNhat
+                )
+                OUTPUT INSERTED.ID
+                VALUES (
+                    @SVTN_ID, @HoTen, @NgaySinh, @Sdt, @Email, @ChucVu, @DonViCongTac,
+                    @ThamNien, @DiaChiLienHe, @AnhDaiDien, @ZaloID,
+                    GETDATE(), GETDATE()
+
+                )
+            `);
+
+        const zaloAccId = insertResult.recordset[0]?.ID;
 
         await addMajorToZaloAccount(pool, zaloAccId, MaSV, Nganh_ID, Nganh, LopNhapHoc_ID, MaLopNhapHoc, Khoa);
 
@@ -695,7 +719,7 @@ app.post('/api/SinhViens/TaoThongTinMoi', async (req, res) => {
         }
 
         res.status(200).json({
-            message: 'Thành công tạo hoặc cập nhật user',
+            message: 'Thành công tạo user',
             zaloAccId
         });
 
@@ -752,12 +776,10 @@ app.get('/api/SinhViens/NganhConLai', async (req, res) => {
                 JOIN DT_LopNhapHoc_SinhVien lhsv ON sv.ID = lhsv.SinhVien_ID
                 JOIN DT_LopNhapHoc lnh ON lhsv.LopNhapHoc_ID = lnh.ID
                 JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
-                JOIN Nganh n2 ON ndt.MaNganh = n2.MaNganh
-                JOIN NhomNganh n1 ON n2.NhomNganh_ID = n1.ID
                 WHERE sv.HienDienSV = 3
                     AND sv.FullName = @HoTen
                     AND sv.NgaySinh = @NgaySinh
-                    AND n2.ID NOT IN (
+                    AND ndt.ID NOT IN (
                         SELECT Nganh_ID FROM ZaloAccount_Nganh WHERE ZaloAccount_ID = @ZaloAccId
                     )
             `);
@@ -1003,7 +1025,6 @@ app.post('/api/SinhViens/CapNhatToanBoThongTin', async (req, res) => {
         return res.status(400).send('Thiếu thông tin bắt buộc');
     }
 
-    const NgayCapNhat = new Date();
     let pool;
 
     try {
@@ -1033,14 +1054,13 @@ app.post('/api/SinhViens/CapNhatToanBoThongTin', async (req, res) => {
             .input('ThamNien', sql.VarChar, ThamNien || null)
             .input('DiaChiLienHe', sql.NVarChar, DiaChiLienHe || null)
             .input('AnhDaiDien', sql.NVarChar, AnhDaiDien)
-            .input('NgayCapNhat', sql.DateTime, NgayCapNhat)
             .query(`
                 UPDATE ZaloAccount
                 SET SVTN_ID = @SVTN_ID, HoTen = @HoTen, NgaySinh = @NgaySinh,
                     Sdt = @Sdt, Email = @Email,
                     ChucVu = @ChucVu, DonViCongTac = @DonViCongTac, ThamNien = @ThamNien,
                     DiaChiLienHe = @DiaChiLienHe, AnhDaiDien = @AnhDaiDien,
-                    NgayCapNhat = @NgayCapNhat
+                    NgayCapNhat = GETDATE()
                 WHERE ZaloID = @ZaloID
             `);
 
@@ -1211,7 +1231,6 @@ app.get('/api/ChiTietBanTin', async (req, res) => {
 app.post('/api/GopY', async (req, res) => {
     const { ZaloID, TieuDe, NoiDung } = req.body;
 
-    // Kiểm tra đầu vào
     if (!ZaloID || !TieuDe || !NoiDung) {
         return res.status(400).json({ error: 'Thiếu thông tin bắt buộc' });
     }
@@ -1221,7 +1240,6 @@ app.post('/api/GopY', async (req, res) => {
     try {
         pool = await getConnection();
 
-        // Kiểm tra ZaloID có tồn tại trong ZaloAccount
         const checkZaloID = await pool.request()
             .input('ZaloID', sql.VarChar, ZaloID)
             .query('SELECT ID FROM ZaloAccount WHERE ZaloID = @ZaloID');
@@ -1232,7 +1250,6 @@ app.post('/api/GopY', async (req, res) => {
 
         const ZaloAcc_ID = checkZaloID.recordset[0].ID;
 
-        // Ghi góp ý
         await pool.request()
             .input('ZaloAccount_ID', sql.Int, ZaloAcc_ID)
             .input('TieuDe', sql.NVarChar, TieuDe)
@@ -1245,7 +1262,7 @@ app.post('/api/GopY', async (req, res) => {
                 )
             `);
 
-        res.status(200).json({ message: 'Góp ý đã được ghi nhận' });
+        res.status(200).json({ success: true, message: 'Góp ý đã được ghi nhận' });
 
     } catch (err) {
         console.error('Lỗi khi xử lý góp ý:', err);
@@ -1379,7 +1396,7 @@ app.get('/api/NhomNganh', async (req, res) => {
             nn.TenNhomNganh,
             COUNT(n.ID) AS SoLuongNganh
         FROM DT_NhomNganh nn
-        LEFT JOIN DT_NganhDaoTao n ON n.NhomNganh_ID = nn.ID
+        JOIN DT_NganhDaoTao n ON n.NhomNganh_ID = nn.ID
         GROUP BY nn.ID, nn.TenNhomNganh
         ORDER BY nn.ID 
         `);
@@ -1412,17 +1429,17 @@ app.get('/api/NganhNhomNganh', async (req, res) => {
         request.input('nhomNganhId', sql.Int, nhomNganhId);
 
         const result = await request.query(`
-      SELECT 
-          n.ID,
-          n.TenNganh,
-          n.NhomNganh_ID,
-          COUNT(DISTINCT lnh.NienKhoa) AS SoLuongKhoa
-      FROM DT_NganhDaoTao n
-      LEFT JOIN DT_NganhDaoTao ndt ON ndt.MaNganh = n.MaNganh
-      LEFT JOIN DT_LopNhapHoc lnh ON lnh.Nganh_ID = ndt.ID
-      WHERE n.NhomNganh_ID = @nhomNganhId
-      GROUP BY n.ID, n.TenNganh, n.NhomNganh_ID
-    `);
+        SELECT 
+            n.ID,
+            n.TenNganh,
+            n.NhomNganh_ID,
+            COUNT(DISTINCT lnh.NienKhoa) AS SoLuongKhoa
+        FROM DT_NganhDaoTao n
+        JOIN DT_NganhDaoTao ndt ON ndt.MaNganh = n.MaNganh
+        JOIN DT_LopNhapHoc lnh ON lnh.Nganh_ID = ndt.ID
+        WHERE n.NhomNganh_ID = @nhomNganhId
+        GROUP BY n.ID, n.TenNganh, n.NhomNganh_ID
+        `);
 
         if (result.recordset.length === 0) {
             return res.status(404).send('Không tìm thấy ngành nào trong nhóm ngành này!');
@@ -1449,17 +1466,17 @@ app.get('/api/KhoaNganh', async (req, res) => {
         request.input('nganhId', sql.Int, nganhId);
 
         const result = await request.query(`
-      SELECT 
-          lnh.NienKhoa,
-          COUNT(lnh.ID) AS SoLuongLop
-      FROM DT_LopNhapHoc lnh
-      JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
-      WHERE ndt.MaNganh = (
-        SELECT MaNganh FROM DT_NganhDaoTao WHERE ID = @nganhId
-      )
-      GROUP BY lnh.NienKhoa
-      ORDER BY lnh.NienKhoa DESC
-    `);
+            SELECT 
+                lnh.NienKhoa,
+                COUNT(lnh.ID) AS SoLuongLop
+            FROM DT_LopNhapHoc lnh
+            JOIN DT_NganhDaoTao ndt ON lnh.Nganh_ID = ndt.ID
+            WHERE ndt.MaNganh = (
+                SELECT MaNganh FROM DT_NganhDaoTao WHERE ID = @nganhId
+            )
+            GROUP BY lnh.NienKhoa
+            ORDER BY lnh.NienKhoa DESC
+            `);
 
         if (result.recordset.length === 0) {
             return res.status(404).send('Không tìm thấy khóa nào cho ngành này!');
